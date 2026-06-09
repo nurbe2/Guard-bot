@@ -55,13 +55,11 @@ LANG = {
         "no_locations": "📭 Manzillar yo'q",
         "no_offers": "📭 Takliflar yo'q",
         "reply_sent": "✅ Javob yuborildi!",
-        "back": "🏠 Bosh menyu",
-        "delete_loc": "🗑 Manzil o'chirish",
         "add_loc": "📍 Manzil kiritish",
+        "delete_loc": "🗑 Manzil o'chirish",
         "add_offer": "🎯 Taklif qo'shish",
         "add_admin": "👤 Admin qo'shish",
         "user_menu_text": "📋 Asosiy menyu",
-        "admin_menu_text": "👑 Admin Panel",
         "choose_shop": "🏪 Qaysi do'konni ko'rmoqchisiz?",
     },
     "ru": {
@@ -79,12 +77,10 @@ LANG = {
         "no_locations": "📭 Адресов нет",
         "no_offers": "📭 Предложений нет",
         "reply_sent": "✅ Ответ отправлен!",
-        "back": "🏠 Главное меню",
-        "delete_loc": "🗑 Удалить адрес",
         "add_loc": "📍 Добавить адрес",
+        "delete_loc": "🗑 Удалить адрес",
         "add_offer": "🎯 Добавить предложение",
         "user_menu_text": "📋 Главное меню",
-        "admin_menu_text": "👑 Админ панель",
         "choose_shop": "🏪 Какой магазин посмотреть?",
     }
 }
@@ -111,13 +107,27 @@ def admin_menu_kb(lang):
     ]
     if lang == "uz":
         kb.append([KeyboardButton(l["add_admin"])])
-    kb.append([KeyboardButton(l["back"])])
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+def combined_menu_kb(lang):
+    """Oddiy menyu + admin panel birlashgan"""
+    l = LANG[lang]
+    kb = [
+        [KeyboardButton(l["menu_locations"])],
+        [KeyboardButton(l["menu_feedback"])],
+        [KeyboardButton(l["menu_offers"])],
+        [KeyboardButton("⚙️ " + l["add_loc"]), KeyboardButton("⚙️ " + l["delete_loc"])],
+        [KeyboardButton("⚙️ " + l["add_offer"])],
+    ]
+    if lang == "uz":
+        kb.append([KeyboardButton("⚙️ " + l["add_admin"])])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 # ==================== START ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
+    context.user_data.clear()
     await update.message.reply_text("🌐 Tilni tanlang | Выберите язык:", reply_markup=lang_kb(), parse_mode='HTML')
 
 async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -126,17 +136,19 @@ async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     lang = q.data.replace("lang_", "")
     uid = str(q.from_user.id)
+    context.user_data.clear()
     
     data.setdefault("users", {})[uid] = {"lang": lang}
     save()
-    context.user_data.clear()
     
     l = LANG[lang]
     await q.edit_message_text(l["welcome"])
-    await q.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
     
     if is_admin(uid):
-        await q.message.reply_text(l["admin_menu_text"], reply_markup=admin_menu_kb(lang))
+        # Admin uchun birlashgan menyu
+        await q.message.reply_text(l["user_menu_text"], reply_markup=combined_menu_kb(lang))
+    else:
+        await q.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
 
 # ==================== HANDLE TEXT ====================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -212,16 +224,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['adding_admin'] = False
         return
     
-    # ===== ADMIN PANEL =====
+    # ===== ADMIN FUNKSIYALARI =====
     if is_admin(uid):
         # Manzil kiritish
-        if txt == l["add_loc"]:
+        if txt in [l["add_loc"], "⚙️ " + l["add_loc"]]:
             context.user_data['adding_loc'] = 'name'
             await update.message.reply_text(l["location_name"])
             return
         
         # Manzil o'chirish
-        if txt == l["delete_loc"]:
+        if txt in [l["delete_loc"], "⚙️ " + l["delete_loc"]]:
             locs = data.get(f"locations_{lang}", [])
             if not locs:
                 await update.message.reply_text(l["no_locations"]); return
@@ -230,22 +242,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Taklif qo'shish
-        if txt == l["add_offer"]:
+        if txt in [l["add_offer"], "⚙️ " + l["add_offer"]]:
             context.user_data['adding_offer'] = True
             await update.message.reply_text(l["offer_prompt"])
             return
         
         # Admin qo'shish (faqat UZ)
-        if lang == "uz" and txt == l["add_admin"]:
+        if lang == "uz" and txt in [l["add_admin"], "⚙️ " + l["add_admin"]]:
             context.user_data['adding_admin'] = True
             await update.message.reply_text(l["admin_id"])
-            return
-        
-        # BOSH MENYUGA QAYTISH
-        if txt == l["back"]:
-            context.user_data.clear()
-            await update.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
-            await update.message.reply_text(l["admin_menu_text"], reply_markup=admin_menu_kb(lang))
             return
     
     # ===== FOYDALANUVCHI MENYUSI =====
@@ -255,7 +260,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(l["no_locations"])
             return
         
-        # Do'kon tanlash imkoni
         kb = [[InlineKeyboardButton(f"🏪 {loc['name']}", callback_data=f"viewloc_{lang}_{i}")] for i, loc in enumerate(locs)]
         await update.message.reply_text(l["choose_shop"], reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -308,14 +312,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     d = q.data
     
-    # Javob yozish
     if d.startswith("reply_"):
         target = d.replace("reply_", "")
         context.user_data['replying_to'] = target
         await q.edit_message_text(f"{q.message.text}\n\n✍️ Javob yozing:")
         return
     
-    # Manzil o'chirish
     if d.startswith("delloc_"):
         parts = d.split("_")
         lang = parts[1]
@@ -328,7 +330,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"✅ {name} o'chirildi!")
         return
     
-    # Do'kon tanlash - lokatsiya ko'rish
     if d.startswith("viewloc_"):
         parts = d.split("_")
         lang = parts[1]
