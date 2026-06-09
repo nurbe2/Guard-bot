@@ -2,590 +2,510 @@ import json
 import os
 import asyncio
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ChatPermissions
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 from flask import Flask
 from threading import Thread
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🛡️ Guard Bot"
+def home(): return "Xentor Maker"
 @app.route('/ping')
 def ping(): return "PONG"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8017075505:AAEe9VAGo2BQDPUUlqUaSgTmHcELOjQFMEo')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8922646707:AAHhq7K2Krvu7EKDJ1vOdiid8dUUyD6X2KQ')
 ADMIN_ID = 8306639956
-PREMIUM_PRICE = "20.000 so'm"
-PREMIUM_CARD = "4916 9903 1619 3280"
-DATA = "/tmp/guard_data.json"
+CHANNEL = '@xentormaker'
+DATA = "/tmp/maker_data.json"
 
 if os.path.exists(DATA):
     with open(DATA) as f: data = json.load(f)
 else:
     data = {
         "users": {},
-        "warnings": {},
-        "welcome": {},
-        "premium": [],
-        "premium_payments": [],
-        "bad_words": [
-            "dnx", "am", "@m", "qotoq", "sholnax", "pshlnx", "pwlnx",
-            "gandon", "g@andon", "oneni ami", "oneni ske", "oneni @mi",
-            "jalab", "jaleb", "j@l@b", "j@lab", "suka", "ske"
-        ]
+        "bots": {},
+        "promocodes": {},
+        "daily_bonus": {}
     }
 
 def save():
     with open(DATA, 'w') as f: json.dump(data, f, ensure_ascii=False)
 
-def is_premium(uid):
-    return str(uid) in data.get("premium", [])
-
-def add_premium(uid):
-    if str(uid) not in data.get("premium", []):
-        data.setdefault("premium", []).append(str(uid))
-        save()
-        return True
-    return False
+# Conversation states
+BOT_API, BOT_PRO_PRICE = range(2)
 
 def main_menu(uid):
+    balance = data["users"].get(str(uid), {}).get("balance", 0)
     kb = [
-        [KeyboardButton("➕ Guruh qo'shish"), KeyboardButton("📋 Guruhlarim")],
-        [KeyboardButton("🗑 Guruh o'chirish"), KeyboardButton("⚙️ Sozlamalar")],
+        [KeyboardButton("🤖 Bot qo'shish")],
+        [KeyboardButton("👛 Hisobim"), KeyboardButton("💰 Pul ishlash")],
+        [KeyboardButton("📋 Botlarim"), KeyboardButton("❓ Yordam")],
     ]
     if uid == ADMIN_ID:
         kb.append([KeyboardButton("👑 Admin Panel")])
-    if not is_premium(uid):
-        kb.append([KeyboardButton(f"⭐ Premium - {PREMIUM_PRICE}")])
-    kb.append([KeyboardButton("❓ Yordam")])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+# ==================== START ====================
+async def check_sub(uid, context):
+    try:
+        member = await context.bot.get_chat_member(CHANNEL, uid)
+        return member.status not in ['left', 'kicked']
+    except:
+        return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
     
     uid = update.effective_user.id
-    groups = data["users"].get(str(uid), {})
+    name = update.effective_user.first_name
     
-    text = f"🛡️ <b>GURUH NAZORATCHI BOT</b>\n\n"
-    text += f"👋 Salom, {update.effective_user.first_name}!\n\n"
-    text += f"📋 Guruhlarim: {len(groups)} ta\n"
-    text += f"💎 Premium: {'✅' if is_premium(uid) else '❌'}\n\n"
-    text += f"<b>➕ Guruh qo'shish:</b> /add @username\n\n"
-    text += f"<b>Guruhda ishlatish:</b>\n"
-    text += f"/ban /unban /mute 1h /unmute /warn\n"
-    text += f"/antispam on/off /antibad on/off\n"
-    text += f"/setwelcome - Salomlashish\n"
-    text += f"@admin - Admin chaqirish"
+    if str(uid) not in data["users"]:
+        data["users"][str(uid)] = {"name": name, "balance": 0, "bots": {}, "joined": datetime.now().strftime("%Y-%m-%d")}
+        save()
     
-    await update.message.reply_text(text, reply_markup=main_menu(uid), parse_mode='HTML')
-
-async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    
-    for member in update.message.new_chat_members:
-        if member.id == context.bot.id:
-            continue
-        
-        welcome_text = data.get("welcome", {}).get(chat_id)
-        if welcome_text:
-            text = welcome_text.replace("{user}", f"<a href='tg://user?id={member.id}'>{member.first_name}</a>")
-            text = text.replace("{chat}", update.effective_chat.title)
-        else:
-            text = f"👋 Assalomu alaykum <a href='tg://user?id={member.id}'>{member.first_name}</a>!\n<b>{update.effective_chat.title}</b> ga xush kelibsiz!"
-        
-        try:
-            await update.message.reply_text(text, parse_mode='HTML')
-        except:
-            pass
-
-async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    
-    if not context.args:
+    if not await check_sub(uid, context):
+        kb = [[InlineKeyboardButton("📢 Obuna bo'lish", url=f"https://t.me/{CHANNEL[1:]}")],
+              [InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")]]
         await update.message.reply_text(
-            "📝 <code>/setwelcome Xabar matni</code>\n\n"
-            "<b>O'zgaruvchilar:</b>\n"
-            "{user} - Foydalanuvchi nomi\n"
-            "{chat} - Guruh nomi",
-            parse_mode='HTML'
+            f"👋 Salom, {name}!\n\n📢 Botdan foydalanish uchun {CHANNEL} ga obuna bo'ling!",
+            reply_markup=InlineKeyboardMarkup(kb)
         )
         return
     
-    text = ' '.join(context.args)
-    data.setdefault("welcome", {})[chat_id] = text
-    save()
-    await update.message.reply_text("✅ Saqlandi!")
+    balance = data["users"][str(uid)].get("balance", 0)
+    bots_count = len(data["users"][str(uid)].get("bots", {}))
+    
+    await update.message.reply_text(
+        f"🤖 <b>XENTOR MAKER BOT</b>\n\n"
+        f"👋 Xush kelibsiz, {name}!\n\n"
+        f"👛 Balans: {balance} so'm\n"
+        f"🤖 Botlarim: {bots_count} ta\n\n"
+        f"Bugun nima qilamiz? 😊",
+        reply_markup=main_menu(uid),
+        parse_mode='HTML'
+    )
 
-async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type == 'private':
-        return
+async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
     
-    chat_id = str(update.effective_chat.id)
-    user = update.effective_user
-    msg = update.message
-    text = (msg.text or msg.caption or "").lower()
-    
-    if not text:
-        return
-    
-    group_settings = None
-    group_owner = None
-    for uid, groups in data["users"].items():
-        if chat_id in groups:
-            group_owner = uid
-            group_settings = groups[chat_id]
-            break
-    
-    if not group_settings:
-        return
-    
-    if "@admin" in text or "/admin" in text:
-        if group_owner:
-            try:
-                await msg.forward(int(group_owner))
-                await msg.reply_text("✅ Admin chaqirildi!")
-            except:
-                pass
-        return
-    
-    mention = f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
-    should_delete = False
-    reason = ""
-    
-    # Anti-spam
-    if group_settings.get("anti_spam", True):
-        spam_words = ['http', 'https', 't.me/', 'telegram.me']
-        if any(word in text for word in spam_words):
-            should_delete = True
-            reason = "reklama"
-    
-    # Anti-bad
-    if group_settings.get("anti_bad", True):
-        for word in data.get("bad_words", []):
-            if word.lower() in text:
-                should_delete = True
-                reason = "haqoratli so'z"
-                break
-    
-    if should_delete:
-        try:
-            await msg.delete()
-            
-            uid = str(user.id)
-            data.setdefault("warnings", {}).setdefault(uid, {}).setdefault(chat_id, 0)
-            data["warnings"][uid][chat_id] += 1
-            warn_count = data["warnings"][uid][chat_id]
-            save()
-            
-            warn_limit = group_settings.get("warn_limit", 3)
-            
-            if warn_count >= warn_limit:
-                try:
-                    await context.bot.ban_chat_member(chat_id, user.id)
-                    await context.bot.send_message(chat_id, f"🚫 {mention} <b>bloklandi!</b> ({warn_count} ogoh)", parse_mode='HTML')
-                except:
-                    pass
-            else:
-                warn_msg = f"⚠️ {mention} <b>iltimos {reason} qilmang!</b>\nOgohlantirish: {warn_count}/{warn_limit}"
-                sent = await context.bot.send_message(chat_id, warn_msg, parse_mode='HTML')
-                await asyncio.sleep(5)
-                try:
-                    await sent.delete()
-                except:
-                    pass
-        except:
-            pass
+    if await check_sub(q.from_user.id, context):
+        await q.delete_message()
+        await start(update, context)
+    else:
+        await q.answer("❌ Hali obuna bo'lmagansiz!", show_alert=True)
 
-async def add_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
+# ==================== BOT QO'SHISH ====================
+async def add_bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton("🎬 Kino Bot Pro - 0 so'm (1/1)", callback_data="bot_type_kino")]]
+    await update.message.reply_text(
+        "🤖 <b>Qaysi bot turini tanlaysiz?</b>",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode='HTML'
+    )
+
+async def bot_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
     
-    if not context.args:
-        await update.message.reply_text("➕ <code>/add @guruh_username</code> yoki <code>/add -100123456</code>\n\n⚠️ Siz guruhda admin bo'lishingiz kerak!", parse_mode='HTML')
-        return
+    context.user_data['bot_type'] = 'kino'
+    await q.edit_message_text(
+        "🔑 <b>Bot API Tokenini yuboring:</b>\n\n"
+        "<i>@BotFather dan olingan tokenni yuboring</i>",
+        parse_mode='HTML'
+    )
+    return BOT_API
+
+async def bot_api_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    token = update.message.text.strip()
     
-    group_id = context.args[0]
-    
+    # Tokenni tekshirish
     try:
-        chat = await context.bot.get_chat(group_id)
+        test_bot = Application.builder().token(token).build()
+        bot_info = await test_bot.bot.get_me()
         
-        user_member = await chat.get_member(update.effective_user.id)
-        if user_member.status not in ['administrator', 'creator']:
-            await update.message.reply_text(f"❌ Siz <b>{chat.title}</b> da admin emassiz!", parse_mode='HTML')
-            return
+        context.user_data['bot_token'] = token
+        context.user_data['bot_name'] = bot_info.first_name
+        context.user_data['bot_username'] = bot_info.username
         
-        try:
-            bot_member = await chat.get_member(context.bot.id)
-            if bot_member.status not in ['administrator', 'creator']:
-                await update.message.reply_text(f"❌ Bot <b>{chat.title}</b> da admin emas!", parse_mode='HTML')
-                return
-        except:
-            await update.message.reply_text("❌ Bot guruhda yo'q!")
-            return
+        await update.message.reply_text(
+            f"✅ Bot topildi: @{bot_info.username}\n\n"
+            f"💰 <b>PRO narxini kiriting (so'm):</b>\n"
+            f"<i>Masalan: 14000</i>",
+            parse_mode='HTML'
+        )
+        return BOT_PRO_PRICE
         
-        data.setdefault("users", {}).setdefault(uid, {})
+    except Exception as e:
+        await update.message.reply_text(f"❌ Noto'g'ri token! Qaytadan yuboring.")
+        return BOT_API
+
+async def bot_pro_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        pro_price = int(update.message.text.strip())
+        uid = str(update.effective_user.id)
         
-        if str(chat.id) in data["users"][uid]:
-            await update.message.reply_text("⚠️ Bu guruh allaqachon qo'shilgan!")
-            return
-        
-        data["users"][uid][str(chat.id)] = {
-            "name": chat.title,
-            "username": chat.username or "",
-            "anti_spam": True,
-            "anti_bad": True,
-            "warn_limit": 3,
-            "added_date": datetime.now().strftime("%Y-%m-%d %H:%M")
+        bot_data = {
+            "token": context.user_data['bot_token'],
+            "name": context.user_data['bot_name'],
+            "username": context.user_data['bot_username'],
+            "pro_price": pro_price,
+            "owner": uid,
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "type": context.user_data['bot_type'],
+            "movies": {},
+            "pro_users": [],
+            "payments": []
         }
+        
+        data.setdefault("bots", {})[context.user_data['bot_username']] = bot_data
+        data["users"][uid].setdefault("bots", {})[context.user_data['bot_username']] = bot_data
         save()
         
         await update.message.reply_text(
-            f"✅ <b>Guruh qo'shildi!</b>\n\n📢 {chat.title}\n🔒 Anti-spam: Yoqilgan\n🤬 Anti-haqorat: Yoqilgan\n⚠️ Limit: 3",
+            f"🎉 <b>Bot yaratildi!</b>\n\n"
+            f"🤖 Nomi: {context.user_data['bot_name']}\n"
+            f"🔗 @{context.user_data['bot_username']}\n"
+            f"💰 PRO narxi: {pro_price} so'm\n\n"
+            f"<b>Keyingi qadamlar:</b>\n"
+            f"1. Botni guruhingizga admin qiling\n"
+            f"2. /start bosib ishlatishni boshlang\n"
+            f"3. Kino qo'shish uchun /admin",
             parse_mode='HTML'
         )
-    
-    except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik: {e}")
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    except:
+        await update.message.reply_text("❌ Raqam kiriting!")
+        return BOT_PRO_PRICE
 
-async def add_group_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("➕ <code>/add @guruh_username</code>\nyoki\n<code>/add -100123456</code>", parse_mode='HTML')
-
-async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== HISOBIM ====================
+async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    groups = data["users"].get(uid, {})
+    balance = data["users"].get(uid, {}).get("balance", 0)
+    bots = data["users"].get(uid, {}).get("bots", {})
     
-    if not groups:
-        await update.message.reply_text("📭 Guruhlar yo'q!")
-        return
-    
-    text = "📋 <b>Guruhlarim:</b>\n\n"
-    for gid, g in groups.items():
-        text += f"📢 {g['name']}\n🆔 <code>{gid}</code>\n🔒 Spam: {'✅' if g.get('anti_spam',True) else '❌'} | 🤬 Bad: {'✅' if g.get('anti_bad',True) else '❌'}\n\n"
-    
-    await update.message.reply_text(text, parse_mode='HTML')
+    await update.message.reply_text(
+        f"👛 <b>Hisobim</b>\n\n"
+        f"💰 Balans: {balance} so'm\n"
+        f"🤖 Botlar: {len(bots)} ta\n\n"
+        f"<b>Pul to'ldirish:</b>\n"
+        f"💳 4916 9903 1619 3280\n"
+        f"📸 To'lov qilib chek yuboring!",
+        parse_mode='HTML'
+    )
 
-async def delete_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== PUL ISHLASH ====================
+async def earn_money(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    groups = data["users"].get(uid, {})
+    today = datetime.now().strftime("%Y-%m-%d")
     
-    if not groups:
-        await update.message.reply_text("📭 Guruhlar yo'q!")
-        return
-    
-    kb = [[InlineKeyboardButton(f"🗑 {g['name'][:30]}", callback_data=f"delgroup_{gid}")] for gid, g in groups.items()]
-    await update.message.reply_text("🗑 O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("🎁 Kunlik bonus (20 so'm)", callback_data="daily_bonus")],
+        [InlineKeyboardButton("🎟 Promokod kiritish", callback_data="promo_enter")],
+    ]
+    await update.message.reply_text(
+        "💰 <b>Pul ishlash</b>\n\n"
+        "🎁 Kunlik bonus: 20 so'm\n"
+        "🎟 Promokod: maxsus kodlar",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode='HTML'
+    )
 
-async def delete_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def daily_bonus_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     
     uid = str(q.from_user.id)
-    gid = q.data.replace("delgroup_", "")
+    today = datetime.now().strftime("%Y-%m-%d")
     
-    if uid in data["users"] and gid in data["users"][uid]:
-        name = data["users"][uid][gid]["name"]
-        del data["users"][uid][gid]
-        save()
-        await q.edit_message_text(f"✅ {name} o'chirildi!")
-
-async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("❌ Reply qiling!"); return
-    user = update.message.reply_to_message.from_user
-    try:
-        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(f"🚫 <b>{user.first_name}</b> bloklandi!", parse_mode='HTML')
-    except:
-        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
-
-async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❌ /unban @username yoki /unban ID_raqam"); return
-    
-    target = context.args[0].replace("@", "")
-    
-    try:
-        try:
-            user_id = int(target)
-            await context.bot.unban_chat_member(update.effective_chat.id, user_id)
-        except ValueError:
-            await context.bot.unban_chat_member(update.effective_chat.id, target)
-        
-        await update.message.reply_text(f"✅ {target} blokdan chiqarildi!", parse_mode='HTML')
-    except Exception as e:
-        await update.message.reply_text(f"❌ Xatolik: {e}")
-
-async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("❌ Reply qiling! Masalan: /mute 1h"); return
-    
-    user = update.message.reply_to_message.from_user
-    args = context.args
-    
-    try:
-        if args:
-            time_str = args[0].lower()
-            if time_str.endswith('h'):
-                until = datetime.now() + timedelta(hours=int(time_str.replace('h','')))
-                time_text = time_str.replace('h',' soatga')
-            elif time_str.endswith('m'):
-                until = datetime.now() + timedelta(minutes=int(time_str.replace('m','')))
-                time_text = time_str.replace('m',' daqiqaga')
-            else:
-                until = datetime.now() + timedelta(hours=int(time_str))
-                time_text = f"{time_str} soatga"
-            
-            await context.bot.restrict_chat_member(
-                update.effective_chat.id, user.id,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=until
-            )
-        else:
-            await context.bot.restrict_chat_member(
-                update.effective_chat.id, user.id,
-                permissions=ChatPermissions(can_send_messages=False)
-            )
-            time_text = "butunlay"
-        
-        await update.message.reply_text(f"🔇 <b>{user.first_name}</b> {time_text} yoza olmaydi!", parse_mode='HTML')
-    except:
-        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
-
-async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("❌ Reply qiling!"); return
-    
-    user = update.message.reply_to_message.from_user
-    try:
-        await context.bot.restrict_chat_member(
-            update.effective_chat.id, user.id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_media_messages=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True
-            )
-        )
-        await update.message.reply_text(f"🔊 <b>{user.first_name}</b> yana yoza oladi!", parse_mode='HTML')
-    except:
-        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
-
-async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("❌ Reply qiling!"); return
-    
-    user = update.message.reply_to_message.from_user
-    chat_id = str(update.effective_chat.id)
-    uid = str(user.id)
-    
-    data.setdefault("warnings", {}).setdefault(uid, {}).setdefault(chat_id, 0)
-    data["warnings"][uid][chat_id] += 1
-    warn_count = data["warnings"][uid][chat_id]
-    save()
-    
-    warn_limit = 3
-    for groups in data["users"].values():
-        if chat_id in groups:
-            warn_limit = groups[chat_id].get("warn_limit", 3)
-            break
-    
-    await update.message.reply_text(f"⚠️ <b>{user.first_name}</b> ogohlantirildi! {warn_count}/{warn_limit}", parse_mode='HTML')
-    
-    if warn_count >= warn_limit:
-        try:
-            await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-            await update.message.reply_text(f"🚫 <b>{user.first_name}</b> bloklandi!", parse_mode='HTML')
-        except: pass
-
-async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    
-    for groups in data["users"].values():
-        if chat_id in groups:
-            g = groups[chat_id]
-            await update.message.reply_text(
-                f"⚙️ <b>Sozlamalar</b>\n\n"
-                f"🔒 Anti-spam: {'✅' if g.get('anti_spam',True) else '❌'}\n"
-                f"🤬 Anti-haqorat: {'✅' if g.get('anti_bad',True) else '❌'}\n"
-                f"⚠️ Limit: {g.get('warn_limit',3)}\n\n"
-                f"/antispam on/off\n/antibad on/off\n/warnlimit 5\n/setwelcome Xabar",
-                parse_mode='HTML'
-            )
-            return
-    
-    await update.message.reply_text("❌ Guruh sozlanmagan!")
-
-async def antispam_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if not context.args:
-        await update.message.reply_text("❌ /antispam on yoki off"); return
-    
-    action = context.args[0].lower()
-    for groups in data["users"].values():
-        if chat_id in groups:
-            groups[chat_id]["anti_spam"] = (action == "on")
-            save()
-            await update.message.reply_text(f"✅ Anti-spam: {action}")
-            return
-
-async def antibad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if not context.args:
-        await update.message.reply_text("❌ /antibad on yoki off"); return
-    
-    action = context.args[0].lower()
-    for groups in data["users"].values():
-        if chat_id in groups:
-            groups[chat_id]["anti_bad"] = (action == "on")
-            save()
-            await update.message.reply_text(f"✅ Anti-haqorat: {action}")
-            return
-
-async def warnlimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if not context.args:
-        await update.message.reply_text("❌ /warnlimit 5"); return
-    
-    try:
-        limit = int(context.args[0])
-        for groups in data["users"].values():
-            if chat_id in groups:
-                groups[chat_id]["warn_limit"] = limit
-                save()
-                await update.message.reply_text(f"✅ Limit: {limit}")
-                return
-    except:
-        await update.message.reply_text("❌ Raqam kiriting!")
-
-async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Ruxsat yo'q!")
+    if data.get("daily_bonus", {}).get(uid) == today:
+        await q.answer("❌ Bugun allaqachon oldingiz!", show_alert=True)
         return
     
-    total_users = len(data["users"])
-    total_groups = sum(len(g) for g in data["users"].values())
-    total_warns = sum(len(w) for w in data.get("warnings", {}).values())
-    total_premium = len(data.get("premium", []))
+    data.setdefault("daily_bonus", {})[uid] = today
+    data["users"][uid]["balance"] = data["users"][uid].get("balance", 0) + 20
+    save()
     
-    await update.message.reply_text(
-        f"👑 <b>ADMIN PANEL</b>\n\n"
-        f"👥 Foydalanuvchilar: {total_users}\n"
-        f"📢 Guruhlar: {total_groups}\n"
-        f"⚠️ Ogohlantirishlar: {total_warns}\n"
-        f"⭐ Premium: {total_premium}\n"
-        f"🤬 Taqiqlangan so'zlar: {len(data.get('bad_words', []))} ta",
+    await q.edit_message_text(
+        f"🎁 <b>Kunlik bonus!</b>\n\n"
+        f"✅ +20 so'm qo'shildi!\n"
+        f"💰 Yangi balans: {data['users'][uid]['balance']} so'm",
         parse_mode='HTML'
     )
 
-async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"⭐ <b>PREMIUM</b>\n\n"
-        f"💰 Narxi: <b>{PREMIUM_PRICE}</b>\n"
-        f"💳 Karta: <code>{PREMIUM_CARD}</code>\n\n"
-        f"📸 To'lov qilib, chek rasmini yuboring!",
-        parse_mode='HTML'
-    )
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    
-    if context.user_data.get('buying_premium'):
-        photo = update.message.photo[-1]
-        kb = [[InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"prem_yes_{uid}"),
-               InlineKeyboardButton("❌ Bekor", callback_data=f"prem_no_{uid}")]]
-        await context.bot.send_photo(ADMIN_ID, photo.file_id,
-            caption=f"📩 Premium so'rovi\n👤 {update.effective_user.first_name}\n🆔 {uid}\n💰 {PREMIUM_PRICE}",
-            reply_markup=InlineKeyboardMarkup(kb))
-        await update.message.reply_text("✅ Chek yuborildi! Admin tasdiqlaydi.")
-        context.user_data['buying_premium'] = False
-
-async def premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def promo_enter_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     
-    if q.from_user.id != ADMIN_ID:
+    context.user_data['entering_promo'] = True
+    await q.edit_message_text("🎟 <b>Promokodni kiriting:</b>", parse_mode='HTML')
+
+# ==================== BOTLARIM ====================
+async def my_bots(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    bots = data["users"].get(uid, {}).get("bots", {})
+    
+    if not bots:
+        await update.message.reply_text("📭 Hali bot yaratilmagan!")
         return
+    
+    text = "🤖 <b>Botlarim:</b>\n\n"
+    for username, bot in bots.items():
+        text += f"🤖 @{username}\n💰 PRO: {bot['pro_price']} so'm\n📅 {bot['created']}\n\n"
+    
+    await update.message.reply_text(text, parse_mode='HTML')
+
+# ==================== ADMIN PANEL ====================
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    kb = [
+        [InlineKeyboardButton("👥 Foydalanuvchi boshqarish", callback_data="admin_user")],
+        [InlineKeyboardButton("🎟 Promokod nazorat", callback_data="admin_promo")],
+        [InlineKeyboardButton("📢 Post tarqatish", callback_data="admin_post")],
+    ]
+    await update.message.reply_text("👑 <b>Admin Panel</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+
+async def admin_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q.from_user.id != ADMIN_ID: return
+    await q.answer()
+    
+    context.user_data['admin_action'] = 'user_id'
+    await q.edit_message_text("👤 <b>Foydalanuvchi ID sini yuboring:</b>", parse_mode='HTML')
+
+async def admin_promo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q.from_user.id != ADMIN_ID: return
+    await q.answer()
+    
+    context.user_data['admin_action'] = 'promo_name'
+    await q.edit_message_text("🎟 <b>Promokod nomini kiriting:</b>", parse_mode='HTML')
+
+# ==================== HANDLE TEXT ====================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != 'private':
+        return
+    
+    uid = update.effective_user.id
+    txt = update.message.text.strip()
+    
+    # Admin amallari
+    if uid == ADMIN_ID and context.user_data.get('admin_action'):
+        action = context.user_data['admin_action']
+        
+        if action == 'user_id':
+            context.user_data['target_uid'] = txt
+            context.user_data['admin_action'] = 'user_amount'
+            await update.message.reply_text("💰 <b>Qancha pul qo'shmoqchisiz?</b>\nMin: 1 | Max: 100000000000", parse_mode='HTML')
+        
+        elif action == 'user_amount':
+            try:
+                amount = int(txt)
+                target = context.user_data['target_uid']
+                
+                data.setdefault("users", {}).setdefault(target, {})
+                data["users"][target]["balance"] = data["users"][target].get("balance", 0) + amount
+                save()
+                
+                await update.message.reply_text(
+                    f"✅ <b>Pul qo'shildi!</b>\n\n"
+                    f"👤 ID: {target}\n"
+                    f"💰 Miqdor: {amount} so'm\n"
+                    f"💎 Yangi balans: {data['users'][target]['balance']} so'm",
+                    parse_mode='HTML'
+                )
+                context.user_data['admin_action'] = None
+            except:
+                await update.message.reply_text("❌ Raqam kiriting!")
+        
+        elif action == 'promo_name':
+            context.user_data['promo_name'] = txt
+            context.user_data['admin_action'] = 'promo_reward'
+            await update.message.reply_text("🎁 <b>Mukofot miqdori (so'm):</b>", parse_mode='HTML')
+        
+        elif action == 'promo_reward':
+            try:
+                reward = int(txt)
+                context.user_data['promo_reward'] = reward
+                context.user_data['admin_action'] = 'promo_limit'
+                await update.message.reply_text("👥 <b>Necha kishi ishlata oladi?</b>", parse_mode='HTML')
+            except:
+                await update.message.reply_text("❌ Raqam kiriting!")
+        
+        elif action == 'promo_limit':
+            try:
+                limit = int(txt)
+                promo_name = context.user_data['promo_name']
+                reward = context.user_data['promo_reward']
+                
+                data.setdefault("promocodes", {})[promo_name] = {
+                    "reward": reward,
+                    "limit": limit,
+                    "used_by": [],
+                    "created_by": str(uid)
+                }
+                save()
+                
+                await update.message.reply_text(
+                    f"✅ <b>Promokod yaratildi!</b>\n\n"
+                    f"🎟 Kod: {promo_name}\n"
+                    f"💰 Mukofot: {reward} so'm\n"
+                    f"👥 Limit: {limit} kishi",
+                    parse_mode='HTML'
+                )
+                context.user_data['admin_action'] = None
+            except:
+                await update.message.reply_text("❌ Raqam kiriting!")
+        
+        elif action == 'post_text':
+            text = f"📢 <b>E'lon</b>\n\n{txt}"
+            users = data.get("users", {})
+            count = 0
+            for uid in users:
+                try:
+                    await context.bot.send_message(int(uid), text, parse_mode='HTML')
+                    count += 1
+                except: pass
+            await update.message.reply_text(f"✅ {count} kishiga yuborildi!")
+            context.user_data['admin_action'] = None
+        
+        return
+    
+    # Foydalanuvchi amallari
+    if txt == "🤖 Bot qo'shish":
+        await add_bot_start(update, context)
+    elif txt == "👛 Hisobim":
+        await my_balance(update, context)
+    elif txt == "💰 Pul ishlash":
+        await earn_money(update, context)
+    elif txt == "📋 Botlarim":
+        await my_bots(update, context)
+    elif txt == "👑 Admin Panel" and uid == ADMIN_ID:
+        await admin_panel(update, context)
+    elif txt == "❓ Yordam":
+        await update.message.reply_text(
+            "❓ <b>Yordam</b>\n\n"
+            "🤖 Bot qo'shish - @BotFather dan token oling\n"
+            "👛 Hisobim - Balans va to'lov\n"
+            "💰 Pul ishlash - Bonus va promokod\n\n"
+            "<b>Admin:</b> @aktived01",
+            parse_mode='HTML'
+        )
+    
+    # Promokod kiritish
+    elif context.user_data.get('entering_promo'):
+        promo = txt.upper()
+        promo_data = data.get("promocodes", {}).get(promo)
+        
+        if not promo_data:
+            await update.message.reply_text("❌ Bunday promokod mavjud emas!")
+        elif str(uid) in promo_data.get("used_by", []):
+            await update.message.reply_text("❌ Siz bu promokodni ishlatgansiz!")
+        elif len(promo_data.get("used_by", [])) >= promo_data.get("limit", 1):
+            await update.message.reply_text("❌ Limit to'lgan!")
+        else:
+            reward = promo_data["reward"]
+            data["promocodes"][promo]["used_by"].append(str(uid))
+            data["users"][str(uid)]["balance"] = data["users"][str(uid)].get("balance", 0) + reward
+            save()
+            await update.message.reply_text(
+                f"🎉 <b>Promokod qabul qilindi!</b>\n\n"
+                f"💰 +{reward} so'm\n"
+                f"💎 Yangi balans: {data['users'][str(uid)]['balance']} so'm",
+                parse_mode='HTML'
+            )
+        
+        context.user_data['entering_promo'] = False
+    
+    # Chek rasmi (pul to'ldirish)
+    elif context.user_data.get('buying_balance'):
+        # Rasmni kutish kerak, bu yerda oddiy xabar
+        pass
+
+# ==================== CALLBACK ====================
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    d = q.data
+    uid = q.from_user.id
+    
+    if d == "check_sub":
+        await check_sub_callback(update, context)
+    elif d == "bot_type_kino":
+        context.user_data['bot_type'] = 'kino'
+        await q.edit_message_text("🔑 <b>Bot API Tokenini yuboring:</b>\n\n<i>@BotFather dan olingan token</i>", parse_mode='HTML')
+        return BOT_API
+    elif d == "daily_bonus":
+        await daily_bonus_callback(update, context)
+    elif d == "promo_enter":
+        await promo_enter_callback(update, context)
+    elif d == "admin_user":
+        await admin_user_callback(update, context)
+    elif d == "admin_promo":
+        await admin_promo_callback(update, context)
+    elif d == "admin_post":
+        context.user_data['admin_action'] = 'post_text'
+        await q.edit_message_text("📢 <b>E'lon matnini yuboring:</b>", parse_mode='HTML')
+
+# ==================== PHOTO HANDLER ====================
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    
+    if context.user_data.get('buying_balance'):
+        photo = update.message.photo[-1]
+        kb = [[InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"bal_yes_{uid}"),
+               InlineKeyboardButton("❌ Bekor", callback_data=f"bal_no_{uid}")]]
+        await context.bot.send_photo(ADMIN_ID, photo.file_id,
+            caption=f"📩 Pul to'ldirish\n👤 {update.effective_user.first_name}\n🆔 {uid}",
+            reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("✅ Chek yuborildi!")
+        context.user_data['buying_balance'] = False
+
+async def balance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    if q.from_user.id != ADMIN_ID: return
     
     parts = q.data.split("_")
     action = parts[1]
     target = parts[2]
     
     if action == "yes":
-        add_premium(target)
-        try:
-            await context.bot.send_message(int(target), "🎉 Premium aktivlashtirildi!")
-        except: pass
-        await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ TASDIQLANDI!")
-    elif action == "no":
-        try:
-            await context.bot.send_message(int(target), "❌ Rad etildi.")
-        except: pass
-        await q.edit_message_caption(caption=f"{q.message.caption}\n\n❌ RAD ETILDI!")
+        # Bu yerda admin miqdorni kiritishi kerak
+        context.user_data['balance_target'] = target
+        await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ Tasdiqlandi! /addmoney {target} MIQDOR")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != 'private':
-        return
-    
-    txt = update.message.text.strip()
-    uid = update.effective_user.id
-    
-    if txt == "➕ Guruh qo'shish":
-        await add_group_button(update, context)
-    elif txt == "📋 Guruhlarim":
-        await my_groups(update, context)
-    elif txt == "🗑 Guruh o'chirish":
-        await delete_group(update, context)
-    elif txt == "👑 Admin Panel" and uid == ADMIN_ID:
-        await admin_panel_cmd(update, context)
-    elif txt == "⚙️ Sozlamalar":
-        await update.message.reply_text("Guruhda /settings yozing")
-    elif txt.startswith("⭐ Premium"):
-        context.user_data['buying_premium'] = True
-        await premium_info(update, context)
-    elif txt == "❓ Yordam":
-        await update.message.reply_text(
-            "🛡️ <b>Buyruqlar:</b>\n\n"
-            "/add @guruh - Guruh qo'shish\n"
-            "/ban - Bloklash (reply)\n"
-            "/unban @user - Blokdan chiqarish\n"
-            "/mute 1h - Mute qilish\n"
-            "/unmute - Mutedan chiqarish\n"
-            "/warn - Ogohlantirish\n"
-            "/antispam on/off - Reklama bloklash\n"
-            "/antibad on/off - Haqorat bloklash\n"
-            "/setwelcome - Salomlashish\n"
-            "@admin - Admin chaqirish",
-            parse_mode='HTML'
-        )
-
+# ==================== MAIN ====================
 def main():
     Thread(target=run_flask).start()
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("add", add_group_cmd))
-    application.add_handler(CommandHandler("ban", ban_user))
-    application.add_handler(CommandHandler("unban", unban_user))
-    application.add_handler(CommandHandler("mute", mute_user))
-    application.add_handler(CommandHandler("unmute", unmute_user))
-    application.add_handler(CommandHandler("warn", warn_user))
-    application.add_handler(CommandHandler("settings", settings_cmd))
-    application.add_handler(CommandHandler("antispam", antispam_cmd))
-    application.add_handler(CommandHandler("antibad", antibad_cmd))
-    application.add_handler(CommandHandler("warnlimit", warnlimit_cmd))
-    application.add_handler(CommandHandler("setwelcome", set_welcome))
-    application.add_handler(CommandHandler("adminpanel", admin_panel_cmd))
     
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_member))
+    application.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(bot_type_callback, pattern="^bot_type_")],
+        states={
+            BOT_API: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot_api_received)],
+            BOT_PRO_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot_pro_price_received)],
+        },
+        fallbacks=[]
+    ))
+    
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(CallbackQueryHandler(delete_group_callback, pattern="^delgroup_"))
-    application.add_handler(CallbackQueryHandler(premium_callback, pattern="^prem_"))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(CallbackQueryHandler(balance_callback, pattern="^bal_"))
     
-    print("✅ Bot ishga tushdi!")
+    print("✅ Xentor Maker Bot ishga tushdi!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
