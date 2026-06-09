@@ -1,5 +1,6 @@
 import json
 import os
+import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -54,11 +55,14 @@ LANG = {
         "no_locations": "📭 Manzillar yo'q",
         "no_offers": "📭 Takliflar yo'q",
         "reply_sent": "✅ Javob yuborildi!",
-        "back": "🏠 Asosiy menyu",
+        "back": "🏠 Bosh menyu",
         "delete_loc": "🗑 Manzil o'chirish",
         "add_loc": "📍 Manzil kiritish",
         "add_offer": "🎯 Taklif qo'shish",
         "add_admin": "👤 Admin qo'shish",
+        "user_menu_text": "📋 Asosiy menyu",
+        "admin_menu_text": "👑 Admin Panel",
+        "choose_shop": "🏪 Qaysi do'konni ko'rmoqchisiz?",
     },
     "ru": {
         "welcome": "🇷🇺 Выбран русский язык!",
@@ -79,6 +83,9 @@ LANG = {
         "delete_loc": "🗑 Удалить адрес",
         "add_loc": "📍 Добавить адрес",
         "add_offer": "🎯 Добавить предложение",
+        "user_menu_text": "📋 Главное меню",
+        "admin_menu_text": "👑 Админ панель",
+        "choose_shop": "🏪 Какой магазин посмотреть?",
     }
 }
 
@@ -88,7 +95,7 @@ def lang_kb():
         [InlineKeyboardButton("🇺🇿 O'zbek tili", callback_data="lang_uz")],
     ])
 
-def user_menu(lang):
+def user_menu_kb(lang):
     l = LANG[lang]
     return ReplyKeyboardMarkup([
         [KeyboardButton(l["menu_locations"])],
@@ -96,7 +103,7 @@ def user_menu(lang):
         [KeyboardButton(l["menu_offers"])],
     ], resize_keyboard=True)
 
-def admin_menu(lang):
+def admin_menu_kb(lang):
     l = LANG[lang]
     kb = [
         [KeyboardButton(l["add_loc"]), KeyboardButton(l["delete_loc"])],
@@ -122,19 +129,14 @@ async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data.setdefault("users", {})[uid] = {"lang": lang}
     save()
+    context.user_data.clear()
     
-    await q.edit_message_text(LANG[lang]["welcome"])
+    l = LANG[lang]
+    await q.edit_message_text(l["welcome"])
+    await q.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
     
     if is_admin(uid):
-        await q.message.reply_text("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=user_menu(lang))
-        await q.message.reply_text("👑 Admin Panel:", reply_markup=admin_menu(lang))
-    else:
-        await q.message.reply_text("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=user_menu(lang))
-
-# ==================== SHOW MENU ====================
-async def show_menu(update: Update, lang):
-    if is_admin(update.effective_user.id):
-        await update.message.reply_text("👑 Admin Panel:", reply_markup=admin_menu(lang))
+        await q.message.reply_text(l["admin_menu_text"], reply_markup=admin_menu_kb(lang))
 
 # ==================== HANDLE TEXT ====================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,14 +149,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = user.get("lang", "uz")
     l = LANG[lang]
     
-    # Fikr yozish
+    # ===== FIKR YOZISH =====
     if context.user_data.get('writing_feedback'):
-        feedback_text = txt
         data.setdefault("feedbacks", []).append({
-            "uid": uid,
-            "name": update.effective_user.first_name,
-            "text": feedback_text,
-            "lang": lang,
+            "uid": uid, "name": update.effective_user.first_name,
+            "text": txt, "lang": lang,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M")
         })
         save()
@@ -164,80 +163,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kb = [[InlineKeyboardButton("📝 Javob yozish", callback_data=f"reply_{uid}")]]
                 await context.bot.send_message(
                     int(admin_id),
-                    f"💬 <b>Yangi fikr!</b>\n\n"
-                    f"👤 {update.effective_user.first_name}\n"
-                    f"🆔 <code>{uid}</code>\n"
-                    f"🌐 {lang}\n\n"
-                    f"📝 {feedback_text}",
-                    reply_markup=InlineKeyboardMarkup(kb),
-                    parse_mode='HTML'
+                    f"💬 <b>Yangi fikr!</b>\n\n👤 {update.effective_user.first_name}\n🆔 <code>{uid}</code>\n🌐 {lang}\n\n📝 {txt}",
+                    reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML'
                 )
             except: pass
         
         await update.message.reply_text(l["feedback_sent"])
         context.user_data['writing_feedback'] = False
-        await show_menu(update, lang)
         return
     
-    # Admin javob yozish
+    # ===== ADMIN JAVOB YOZISH =====
     if context.user_data.get('replying_to'):
         target = context.user_data['replying_to']
         try:
-            await context.bot.send_message(
-                int(target),
-                f"📩 <b>Admin javobi:</b>\n\n💬 {txt}",
-                parse_mode='HTML'
-            )
+            await context.bot.send_message(int(target), f"📩 <b>Admin javobi:</b>\n\n💬 {txt}", parse_mode='HTML')
             await update.message.reply_text(l["reply_sent"])
         except:
             await update.message.reply_text("❌ Yuborib bo'lmadi!")
         context.user_data['replying_to'] = None
         return
     
-    # Admin amallari
-    if is_admin(uid):
-        # Manzil kiritish
-        if txt in [l["add_loc"], "📍 Manzil kiritish", "📍 Добавить адрес"]:
-            context.user_data['adding_loc'] = 'name'
-            await update.message.reply_text(l["location_name"])
-            return
-        
-        # Manzil o'chirish
-        if txt in [l["delete_loc"], "🗑 Manzil o'chirish", "🗑 Удалить адрес"]:
-            locs = data.get(f"locations_{lang}", [])
-            if not locs:
-                await update.message.reply_text(l["no_locations"]); return
-            kb = [[InlineKeyboardButton(f"🗑 {loc['name'][:30]}", callback_data=f"delloc_{lang}_{i}")] for i, loc in enumerate(locs)]
-            await update.message.reply_text("O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-            return
-        
-        # Taklif qo'shish
-        if txt in [l["add_offer"], "🎯 Taklif qo'shish", "🎯 Добавить предложение"]:
-            context.user_data['adding_offer'] = True
-            await update.message.reply_text(l["offer_prompt"])
-            return
-        
-        # Admin qo'shish (faqat UZ)
-        if lang == "uz" and txt in [l["add_admin"], "👤 Admin qo'shish"]:
-            context.user_data['adding_admin'] = True
-            await update.message.reply_text(l["admin_id"])
-            return
-        
-        # Asosiy menyu
-        if txt in [l["back"], "🏠 Asosiy menyu", "🏠 Главное меню"]:
-            context.user_data.clear()
-            await update.message.reply_text("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=user_menu(lang))
-            await show_menu(update, lang)
-            return
-    
-    # Manzil nomi kiritildi
+    # ===== ADMIN - MANZIL NOMI =====
     if context.user_data.get('adding_loc') == 'name':
         context.user_data['loc_name'] = txt
         context.user_data['adding_loc'] = 'location'
         await update.message.reply_text(l["location_send"])
         return
     
-    # Taklif kiritildi
+    # ===== ADMIN - TAKLIF =====
     if context.user_data.get('adding_offer'):
         if lang == "uz":
             data.setdefault("offers_uz", []).append(txt)
@@ -248,7 +201,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['adding_offer'] = False
         return
     
-    # Admin ID kiritildi
+    # ===== ADMIN - ID =====
     if context.user_data.get('adding_admin'):
         if txt not in data.get("admins", []):
             data.setdefault("admins", []).append(txt)
@@ -259,25 +212,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['adding_admin'] = False
         return
     
-    # Foydalanuvchi menyusi
+    # ===== ADMIN PANEL =====
+    if is_admin(uid):
+        # Manzil kiritish
+        if txt == l["add_loc"]:
+            context.user_data['adding_loc'] = 'name'
+            await update.message.reply_text(l["location_name"])
+            return
+        
+        # Manzil o'chirish
+        if txt == l["delete_loc"]:
+            locs = data.get(f"locations_{lang}", [])
+            if not locs:
+                await update.message.reply_text(l["no_locations"]); return
+            kb = [[InlineKeyboardButton(f"🗑 {loc['name'][:30]}", callback_data=f"delloc_{lang}_{i}")] for i, loc in enumerate(locs)]
+            await update.message.reply_text("O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb))
+            return
+        
+        # Taklif qo'shish
+        if txt == l["add_offer"]:
+            context.user_data['adding_offer'] = True
+            await update.message.reply_text(l["offer_prompt"])
+            return
+        
+        # Admin qo'shish (faqat UZ)
+        if lang == "uz" and txt == l["add_admin"]:
+            context.user_data['adding_admin'] = True
+            await update.message.reply_text(l["admin_id"])
+            return
+        
+        # BOSH MENYUGA QAYTISH
+        if txt == l["back"]:
+            context.user_data.clear()
+            await update.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
+            await update.message.reply_text(l["admin_menu_text"], reply_markup=admin_menu_kb(lang))
+            return
+    
+    # ===== FOYDALANUVCHI MENYUSI =====
     if txt == l["menu_locations"]:
         locs = data.get(f"locations_{lang}", [])
         if not locs:
             await update.message.reply_text(l["no_locations"])
             return
         
-        await update.message.reply_text(f"📍 Jami: {len(locs)} ta manzil")
-        for i, loc in enumerate(locs, 1):
-            try:
-                await context.bot.send_location(
-                    update.effective_chat.id,
-                    latitude=loc['latitude'],
-                    longitude=loc['longitude']
-                )
-                await asyncio.sleep(0.3)
-                await update.message.reply_text(f"{i}. 🏪 {loc['name']}")
-            except:
-                await update.message.reply_text(f"{i}. 🏪 {loc['name']}\n📍 {loc.get('address', '')}")
+        # Do'kon tanlash imkoni
+        kb = [[InlineKeyboardButton(f"🏪 {loc['name']}", callback_data=f"viewloc_{lang}_{i}")] for i, loc in enumerate(locs)]
+        await update.message.reply_text(l["choose_shop"], reply_markup=InlineKeyboardMarkup(kb))
         return
     
     if txt == l["menu_feedback"]:
@@ -319,9 +299,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data.setdefault("locations_ru", []).append(loc_data)
         save()
         
-        await update.message.reply_text(
-            f"{l['location_added']}\n\n🏪 {loc_data['name']}\n📍 {loc_data['latitude']}, {loc_data['longitude']}"
-        )
+        await update.message.reply_text(f"{l['location_added']}\n\n🏪 {loc_data['name']}")
         context.user_data['adding_loc'] = None
 
 # ==================== CALLBACK ====================
@@ -330,26 +308,46 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     d = q.data
     
+    # Javob yozish
     if d.startswith("reply_"):
         target = d.replace("reply_", "")
         context.user_data['replying_to'] = target
         await q.edit_message_text(f"{q.message.text}\n\n✍️ Javob yozing:")
+        return
     
-    elif d.startswith("delloc_"):
+    # Manzil o'chirish
+    if d.startswith("delloc_"):
         parts = d.split("_")
         lang = parts[1]
         index = int(parts[2])
-        
         key = f"locations_{lang}"
         if key in data and index < len(data[key]):
             name = data[key][index]["name"]
             del data[key][index]
             save()
             await q.edit_message_text(f"✅ {name} o'chirildi!")
+        return
+    
+    # Do'kon tanlash - lokatsiya ko'rish
+    if d.startswith("viewloc_"):
+        parts = d.split("_")
+        lang = parts[1]
+        index = int(parts[2])
+        key = f"locations_{lang}"
+        if key in data and index < len(data[key]):
+            loc = data[key][index]
+            try:
+                await context.bot.send_location(
+                    q.from_user.id,
+                    latitude=loc['latitude'],
+                    longitude=loc['longitude']
+                )
+                await q.edit_message_text(f"🏪 {loc['name']}\n📍 Yukoridagi lokatsiyada")
+            except:
+                await q.edit_message_text(f"🏪 {loc['name']}\n📍 {loc.get('address', '')}")
+        return
 
 # ==================== MAIN ====================
-import asyncio
-
 def main():
     Thread(target=run_flask).start()
     application = Application.builder().token(BOT_TOKEN).build()
@@ -360,6 +358,7 @@ def main():
     application.add_handler(CallbackQueryHandler(lang_callback, pattern="^lang_"))
     application.add_handler(CallbackQueryHandler(callback_handler, pattern="^reply_"))
     application.add_handler(CallbackQueryHandler(callback_handler, pattern="^delloc_"))
+    application.add_handler(CallbackQueryHandler(callback_handler, pattern="^viewloc_"))
     
     print("✅ Umnyaga Bot ishga tushdi!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
