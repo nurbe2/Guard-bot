@@ -472,4 +472,68 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif txt == "👑 Admin Panel" and uid == ADMIN_ID:
         kb = [
             [InlineKeyboardButton("👥 Foydalanuvchiga pul", callback_data="admin_user")],
-            [InlineKeyboardButton("🎟 Promokod yaratish", callba
+            [InlineKeyboardButton("🎟 Promokod yaratish", callback_data="admin_promo")],
+            [InlineKeyboardButton("📢 Post tarqatish", callback_data="admin_post")],
+        ]
+        await update.message.reply_text("👑 Admin Panel", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    elif txt == "❓ Yordam":
+        await update.message.reply_text("🤖 @BotFather dan token oling va bot yarating!")
+
+# ==================== CALLBACK ====================
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    d = q.data
+    uid = q.from_user.id
+    
+    if d == "check_sub":
+        if await check_sub(uid, context):
+            await q.delete_message()
+            await start(update, context)
+        else:
+            await q.answer("❌ Obuna bo'lmagansiz!", show_alert=True)
+    elif d == "daily_bonus":
+        today = datetime.now().strftime("%Y-%m-%d")
+        if data.get("daily_bonus", {}).get(str(uid)) == today:
+            await q.answer("❌ Bugun oldingiz!", show_alert=True)
+        else:
+            data.setdefault("daily_bonus", {})[str(uid)] = today
+            data["users"][str(uid)]["balance"] = data["users"][str(uid)].get("balance", 0) + 20
+            save()
+            await q.edit_message_text(f"✅ +20 so'm!\n💰 Balans: {data['users'][str(uid)]['balance']} so'm")
+    elif d == "promo_enter":
+        context.user_data['entering_promo'] = True
+        await q.edit_message_text("🎟 Promokodni kiriting:")
+    elif d == "admin_user":
+        if uid != ADMIN_ID: return
+        context.user_data['admin_action'] = 'user_id'
+        await q.edit_message_text("👤 Foydalanuvchi ID sini yuboring:")
+    elif d == "admin_promo":
+        if uid != ADMIN_ID: return
+        context.user_data['admin_action'] = 'promo_name'
+        await q.edit_message_text("🎟 Promokod nomini kiriting:")
+    elif d == "admin_post":
+        if uid != ADMIN_ID: return
+        context.user_data['admin_action'] = 'post_text'
+        await q.edit_message_text("📢 E'lon matnini yuboring:")
+
+# ==================== MAIN ====================
+async def main():
+    application = Application.builder().token(MAKER_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    
+    # Saqlangan botlarni qayta ishga tushirish
+    for username, bot_data in data.get("user_bots", {}).items():
+        try:
+            await start_user_kino_bot(username, bot_data["token"], bot_data["owner"], bot_data["pro_price"])
+        except:
+            pass
+    
+    print("✅ Xentor Maker ishga tushdi!")
+    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    asyncio.run(main())
