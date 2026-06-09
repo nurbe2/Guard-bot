@@ -17,6 +17,8 @@ def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8017075505:AAEe9VAGo2BQDPUUlqUaSgTmHcELOjQFMEo')
 ADMIN_ID = 8306639956
+PREMIUM_PRICE = "20.000 so'm"
+PREMIUM_CARD = "4916 9903 1619 3280"
 DATA = "/tmp/guard_data.json"
 
 if os.path.exists(DATA):
@@ -26,6 +28,8 @@ else:
         "users": {},
         "warnings": {},
         "welcome": {},
+        "premium": [],
+        "premium_payments": [],
         "bad_words": [
             "dnx", "am", "@m", "qotoq", "sholnax", "pshlnx", "pwlnx",
             "gandon", "g@andon", "oneni ami", "oneni ske", "oneni @mi",
@@ -36,33 +40,39 @@ else:
 def save():
     with open(DATA, 'w') as f: json.dump(data, f, ensure_ascii=False)
 
-# ==================== MENYU ====================
-def main_menu():
-    return ReplyKeyboardMarkup([
+def is_premium(uid):
+    return str(uid) in data.get("premium", [])
+
+def add_premium(uid):
+    if str(uid) not in data.get("premium", []):
+        data.setdefault("premium", []).append(str(uid))
+        save()
+        return True
+    return False
+
+def main_menu(uid):
+    kb = [
         [KeyboardButton("➕ Guruh qo'shish"), KeyboardButton("📋 Guruhlarim")],
         [KeyboardButton("🗑 Guruh o'chirish"), KeyboardButton("⚙️ Sozlamalar")],
-        [KeyboardButton("❓ Yordam")],
-    ], resize_keyboard=True)
+    ]
+    if uid == ADMIN_ID:
+        kb.append([KeyboardButton("👑 Admin Panel")])
+    if not is_premium(uid):
+        kb.append([KeyboardButton(f"⭐ Premium - {PREMIUM_PRICE}")])
+    kb.append([KeyboardButton("❓ Yordam")])
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
-def admin_menu():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("➕ Guruh qo'shish"), KeyboardButton("📋 Guruhlarim")],
-        [KeyboardButton("🗑 Guruh o'chirish"), KeyboardButton("👑 Admin Panel")],
-        [KeyboardButton("❓ Yordam")],
-    ], resize_keyboard=True)
-
-# ==================== START ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
     
     uid = update.effective_user.id
     groups = data["users"].get(str(uid), {})
-    is_admin = uid == ADMIN_ID
     
     text = f"🛡️ <b>GURUH NAZORATCHI BOT</b>\n\n"
     text += f"👋 Salom, {update.effective_user.first_name}!\n\n"
-    text += f"📋 Guruhlarim: {len(groups)} ta\n\n"
+    text += f"📋 Guruhlarim: {len(groups)} ta\n"
+    text += f"💎 Premium: {'✅' if is_premium(uid) else '❌'}\n\n"
     text += f"<b>➕ Guruh qo'shish:</b> /add @username\n\n"
     text += f"<b>Guruhda ishlatish:</b>\n"
     text += f"/ban /unban /mute 1h /unmute /warn\n"
@@ -70,10 +80,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"/setwelcome - Salomlashish\n"
     text += f"@admin - Admin chaqirish"
     
-    kb = admin_menu() if is_admin else main_menu()
-    await update.message.reply_text(text, reply_markup=kb, parse_mode='HTML')
+    await update.message.reply_text(text, reply_markup=main_menu(uid), parse_mode='HTML')
 
-# ==================== YANGI A'ZO SALOMLASHISH ====================
 async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     
@@ -81,7 +89,6 @@ async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.id == context.bot.id:
             continue
         
-        # Welcome xabari
         welcome_text = data.get("welcome", {}).get(chat_id)
         if welcome_text:
             text = welcome_text.replace("{user}", f"<a href='tg://user?id={member.id}'>{member.first_name}</a>")
@@ -99,25 +106,19 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            "📝 <b>Salomlashish xabarini o'rnatish</b>\n\n"
-            "<code>/setwelcome Xabar matni</code>\n\n"
+            "📝 <code>/setwelcome Xabar matni</code>\n\n"
             "<b>O'zgaruvchilar:</b>\n"
             "{user} - Foydalanuvchi nomi\n"
-            "{chat} - Guruh nomi\n\n"
-            "<b>Misol:</b>\n"
-            "<code>/setwelcome Assalom {user}, {chat} ga xush kelibsiz!</code>",
+            "{chat} - Guruh nomi",
             parse_mode='HTML'
         )
         return
     
     text = ' '.join(context.args)
-    if "welcome" not in data:
-        data["welcome"] = {}
-    data["welcome"][chat_id] = text
+    data.setdefault("welcome", {})[chat_id] = text
     save()
-    await update.message.reply_text("✅ Salomlashish xabari saqlandi!")
+    await update.message.reply_text("✅ Saqlandi!")
 
-# ==================== XABAR TEKSHIRISH ====================
 async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type == 'private':
         return
@@ -130,7 +131,6 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
     
-    # Guruh sozlamalarini topish
     group_settings = None
     group_owner = None
     for uid, groups in data["users"].items():
@@ -142,12 +142,11 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not group_settings:
         return
     
-    # @admin chaqirish
     if "@admin" in text or "/admin" in text:
         if group_owner:
             try:
                 await msg.forward(int(group_owner))
-                await msg.reply_text(f"✅ Admin chaqirildi!", parse_mode='HTML')
+                await msg.reply_text("✅ Admin chaqirildi!")
             except:
                 pass
         return
@@ -156,14 +155,14 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     should_delete = False
     reason = ""
     
-    # Anti-spam (link)
+    # Anti-spam
     if group_settings.get("anti_spam", True):
-        spam_words = ['http', 'https', '.com', '.uz', '.ru', '.net', '.org', 't.me/', 'telegram.me']
+        spam_words = ['http', 'https', 't.me/', 'telegram.me']
         if any(word in text for word in spam_words):
             should_delete = True
             reason = "reklama"
     
-    # Anti-bad words
+    # Anti-bad
     if group_settings.get("anti_bad", True):
         for word in data.get("bad_words", []):
             if word.lower() in text:
@@ -176,11 +175,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.delete()
             
             uid = str(user.id)
-            if uid not in data["warnings"]:
-                data["warnings"][uid] = {}
-            if chat_id not in data["warnings"][uid]:
-                data["warnings"][uid][chat_id] = 0
-            
+            data.setdefault("warnings", {}).setdefault(uid, {}).setdefault(chat_id, 0)
             data["warnings"][uid][chat_id] += 1
             warn_count = data["warnings"][uid][chat_id]
             save()
@@ -190,11 +185,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if warn_count >= warn_limit:
                 try:
                     await context.bot.ban_chat_member(chat_id, user.id)
-                    await context.bot.send_message(
-                        chat_id,
-                        f"🚫 {mention} <b>bloklandi!</b> ({warn_count} ogohlantirish)",
-                        parse_mode='HTML'
-                    )
+                    await context.bot.send_message(chat_id, f"🚫 {mention} <b>bloklandi!</b> ({warn_count} ogoh)", parse_mode='HTML')
                 except:
                     pass
             else:
@@ -208,15 +199,11 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ==================== GURUH QO'SHISH ====================
 async def add_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     
     if not context.args:
-        await update.message.reply_text(
-            "➕ <code>/add @guruh_username</code>\nyoki\n<code>/add -100123456</code>\n\n⚠️ Siz guruhda admin bo'lishingiz kerak!",
-            parse_mode='HTML'
-        )
+        await update.message.reply_text("➕ <code>/add @guruh_username</code> yoki <code>/add -100123456</code>\n\n⚠️ Siz guruhda admin bo'lishingiz kerak!", parse_mode='HTML')
         return
     
     group_id = context.args[0]
@@ -224,13 +211,11 @@ async def add_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat = await context.bot.get_chat(group_id)
         
-        # Foydalanuvchi adminmi?
         user_member = await chat.get_member(update.effective_user.id)
         if user_member.status not in ['administrator', 'creator']:
             await update.message.reply_text(f"❌ Siz <b>{chat.title}</b> da admin emassiz!", parse_mode='HTML')
             return
         
-        # Bot adminmi?
         try:
             bot_member = await chat.get_member(context.bot.id)
             if bot_member.status not in ['administrator', 'creator']:
@@ -240,8 +225,7 @@ async def add_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Bot guruhda yo'q!")
             return
         
-        if uid not in data["users"]:
-            data["users"][uid] = {}
+        data.setdefault("users", {}).setdefault(uid, {})
         
         if str(chat.id) in data["users"][uid]:
             await update.message.reply_text("⚠️ Bu guruh allaqachon qo'shilgan!")
@@ -266,12 +250,8 @@ async def add_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Xatolik: {e}")
 
 async def add_group_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "➕ <code>/add @guruh_username</code>\nyoki\n<code>/add -100123456</code>",
-        parse_mode='HTML'
-    )
+    await update.message.reply_text("➕ <code>/add @guruh_username</code>\nyoki\n<code>/add -100123456</code>", parse_mode='HTML')
 
-# ==================== GURUHLARIM / O'CHIRISH ====================
 async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     groups = data["users"].get(uid, {})
@@ -295,7 +275,7 @@ async def delete_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     kb = [[InlineKeyboardButton(f"🗑 {g['name'][:30]}", callback_data=f"delgroup_{gid}")] for gid, g in groups.items()]
-    await update.message.reply_text("🗑 O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    await update.message.reply_text("🗑 O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def delete_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -310,7 +290,6 @@ async def delete_group_callback(update: Update, context: ContextTypes.DEFAULT_TY
         save()
         await q.edit_message_text(f"✅ {name} o'chirildi!")
 
-# ==================== BUYRUQLAR ====================
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         await update.message.reply_text("❌ Reply qiling!"); return
@@ -319,17 +298,24 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
         await update.message.reply_text(f"🚫 <b>{user.first_name}</b> bloklandi!", parse_mode='HTML')
     except:
-        await update.message.reply_text("❌ Bot admin bo'lishi kerak!")
+        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
 
 async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❌ /unban @username yoki /unban ID"); return
+        await update.message.reply_text("❌ /unban @username yoki /unban ID_raqam"); return
+    
+    target = context.args[0].replace("@", "")
+    
     try:
-        target = context.args[0].replace("@", "")
-        await context.bot.unban_chat_member(update.effective_chat.id, target)
-        await update.message.reply_text(f"✅ <b>{target}</b> blokdan chiqarildi!", parse_mode='HTML')
-    except:
-        await update.message.reply_text("❌ Bot admin bo'lishi kerak!")
+        try:
+            user_id = int(target)
+            await context.bot.unban_chat_member(update.effective_chat.id, user_id)
+        except ValueError:
+            await context.bot.unban_chat_member(update.effective_chat.id, target)
+        
+        await update.message.reply_text(f"✅ {target} blokdan chiqarildi!", parse_mode='HTML')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xatolik: {e}")
 
 async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
@@ -365,7 +351,7 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"🔇 <b>{user.first_name}</b> {time_text} yoza olmaydi!", parse_mode='HTML')
     except:
-        await update.message.reply_text("❌ Bot admin bo'lishi kerak!")
+        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
 
 async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
@@ -375,11 +361,16 @@ async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.restrict_chat_member(
             update.effective_chat.id, user.id,
-            permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True)
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
         )
         await update.message.reply_text(f"🔊 <b>{user.first_name}</b> yana yoza oladi!", parse_mode='HTML')
     except:
-        await update.message.reply_text("❌ Bot admin bo'lishi kerak!")
+        await update.message.reply_text("❌ Bot admin emas yoki huquq yetarli emas!")
 
 async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
@@ -389,13 +380,11 @@ async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     uid = str(user.id)
     
-    if uid not in data["warnings"]: data["warnings"][uid] = {}
-    if chat_id not in data["warnings"][uid]: data["warnings"][uid][chat_id] = 0
-    
+    data.setdefault("warnings", {}).setdefault(uid, {}).setdefault(chat_id, 0)
     data["warnings"][uid][chat_id] += 1
+    warn_count = data["warnings"][uid][chat_id]
     save()
     
-    warn_count = data["warnings"][uid][chat_id]
     warn_limit = 3
     for groups in data["users"].values():
         if chat_id in groups:
@@ -421,10 +410,7 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔒 Anti-spam: {'✅' if g.get('anti_spam',True) else '❌'}\n"
                 f"🤬 Anti-haqorat: {'✅' if g.get('anti_bad',True) else '❌'}\n"
                 f"⚠️ Limit: {g.get('warn_limit',3)}\n\n"
-                f"/antispam on/off\n"
-                f"/antibad on/off\n"
-                f"/warnlimit 5\n"
-                f"/setwelcome Xabar",
+                f"/antispam on/off\n/antibad on/off\n/warnlimit 5\n/setwelcome Xabar",
                 parse_mode='HTML'
             )
             return
@@ -473,7 +459,6 @@ async def warnlimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Raqam kiriting!")
 
-# ==================== ADMIN PANEL ====================
 async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Ruxsat yo'q!")
@@ -482,26 +467,69 @@ async def admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(data["users"])
     total_groups = sum(len(g) for g in data["users"].values())
     total_warns = sum(len(w) for w in data.get("warnings", {}).values())
+    total_premium = len(data.get("premium", []))
     
     await update.message.reply_text(
         f"👑 <b>ADMIN PANEL</b>\n\n"
         f"👥 Foydalanuvchilar: {total_users}\n"
         f"📢 Guruhlar: {total_groups}\n"
         f"⚠️ Ogohlantirishlar: {total_warns}\n"
-        f"🔒 Anti-spam: Faol\n"
-        f"🤬 Anti-haqorat: Faol\n"
-        f"📋 Taqiqlangan so'zlar: {len(data.get('bad_words', []))} ta",
+        f"⭐ Premium: {total_premium}\n"
+        f"🤬 Taqiqlangan so'zlar: {len(data.get('bad_words', []))} ta",
         parse_mode='HTML'
     )
 
-# ==================== HANDLE TEXT ====================
+async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"⭐ <b>PREMIUM</b>\n\n"
+        f"💰 Narxi: <b>{PREMIUM_PRICE}</b>\n"
+        f"💳 Karta: <code>{PREMIUM_CARD}</code>\n\n"
+        f"📸 To'lov qilib, chek rasmini yuboring!",
+        parse_mode='HTML'
+    )
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    
+    if context.user_data.get('buying_premium'):
+        photo = update.message.photo[-1]
+        kb = [[InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"prem_yes_{uid}"),
+               InlineKeyboardButton("❌ Bekor", callback_data=f"prem_no_{uid}")]]
+        await context.bot.send_photo(ADMIN_ID, photo.file_id,
+            caption=f"📩 Premium so'rovi\n👤 {update.effective_user.first_name}\n🆔 {uid}\n💰 {PREMIUM_PRICE}",
+            reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("✅ Chek yuborildi! Admin tasdiqlaydi.")
+        context.user_data['buying_premium'] = False
+
+async def premium_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    if q.from_user.id != ADMIN_ID:
+        return
+    
+    parts = q.data.split("_")
+    action = parts[1]
+    target = parts[2]
+    
+    if action == "yes":
+        add_premium(target)
+        try:
+            await context.bot.send_message(int(target), "🎉 Premium aktivlashtirildi!")
+        except: pass
+        await q.edit_message_caption(caption=f"{q.message.caption}\n\n✅ TASDIQLANDI!")
+    elif action == "no":
+        try:
+            await context.bot.send_message(int(target), "❌ Rad etildi.")
+        except: pass
+        await q.edit_message_caption(caption=f"{q.message.caption}\n\n❌ RAD ETILDI!")
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
     
     txt = update.message.text.strip()
     uid = update.effective_user.id
-    is_admin = uid == ADMIN_ID
     
     if txt == "➕ Guruh qo'shish":
         await add_group_button(update, context)
@@ -509,10 +537,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await my_groups(update, context)
     elif txt == "🗑 Guruh o'chirish":
         await delete_group(update, context)
-    elif txt == "👑 Admin Panel" and is_admin:
+    elif txt == "👑 Admin Panel" and uid == ADMIN_ID:
         await admin_panel_cmd(update, context)
     elif txt == "⚙️ Sozlamalar":
         await update.message.reply_text("Guruhda /settings yozing")
+    elif txt.startswith("⭐ Premium"):
+        context.user_data['buying_premium'] = True
+        await premium_info(update, context)
     elif txt == "❓ Yordam":
         await update.message.reply_text(
             "🛡️ <b>Buyruqlar:</b>\n\n"
@@ -529,7 +560,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
-# ==================== MAIN ====================
 def main():
     Thread(target=run_flask).start()
     application = Application.builder().token(BOT_TOKEN).build()
@@ -549,11 +579,13 @@ def main():
     application.add_handler(CommandHandler("adminpanel", admin_panel_cmd))
     
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_member))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(CallbackQueryHandler(delete_group_callback, pattern="^delgroup_"))
+    application.add_handler(CallbackQueryHandler(premium_callback, pattern="^prem_"))
     
-    print("✅ Global Guruh Nazoratchi Bot ishga tushdi!")
+    print("✅ Bot ishga tushdi!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
