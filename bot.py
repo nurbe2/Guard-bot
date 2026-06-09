@@ -1,7 +1,6 @@
 import json
 import os
-import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
@@ -10,530 +9,300 @@ from threading import Thread
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Xentor Maker"
+def home(): return "Umnyaga Bot"
 @app.route('/ping')
 def ping(): return "PONG"
 def run_flask(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-MAKER_TOKEN = os.environ.get('BOT_TOKEN', '8922646707:AAHhq7K2Krvu7EKDJ1vOdiid8dUUyD6X2KQ')
-ADMIN_ID = 8306639956
-CHANNEL = '@xentormaker'
-DATA = "/tmp/maker_data.json"
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8833302378:AAExHBexYziQ0wIjxtXyh3zO993H7cZsrhA')
+DATA = "/tmp/umnyaga_data.json"
 
 if os.path.exists(DATA):
     with open(DATA) as f: data = json.load(f)
 else:
     data = {
         "users": {},
-        "user_bots": {},
-        "promocodes": {},
-        "daily_bonus": {}
+        "admins": ["8306639956"],
+        "locations_uz": [],
+        "locations_ru": [],
+        "offers_uz": [],
+        "offers_ru": [],
+        "feedbacks": []
     }
 
 def save():
     with open(DATA, 'w') as f: json.dump(data, f, ensure_ascii=False)
 
-# Faol foydalanuvchi botlari
-active_user_bots = {}
+def is_admin(uid):
+    return str(uid) in data.get("admins", [])
 
-def maker_menu(uid):
-    balance = data["users"].get(str(uid), {}).get("balance", 0)
-    kb = [
-        [KeyboardButton("🤖 Bot yaratish")],
-        [KeyboardButton("👛 Hisobim"), KeyboardButton("💰 Pul ishlash")],
-        [KeyboardButton("📋 Botlarim"), KeyboardButton("❓ Yordam")],
-    ]
-    if uid == ADMIN_ID:
-        kb.append([KeyboardButton("👑 Admin Panel")])
-    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+LANG = {
+    "uz": {
+        "welcome": "🇺🇿 O'zbek tili tanlandi!",
+        "menu_locations": "📍 Joylashuv manzillari",
+        "menu_feedback": "💬 Fikr bildirish & Shikoyat qilish",
+        "menu_offers": "🎯 Takliflar",
+        "feedback_prompt": "💬 Fikr yoki shikoyatingizni yozing:",
+        "feedback_sent": "✅ Fikringiz qabul qilindi! Rahmat!",
+        "location_name_prompt": "🏪 Do'kon nomini yozing:",
+        "location_send": "📍 Endi manzilni lokatsiya qilib yuboring:",
+        "location_added": "✅ Manzil qo'shildi!",
+        "offer_prompt": "🎯 Qo'shmoqchi bo'lgan taklifni yozing:",
+        "offer_added": "✅ Taklif qo'shildi!",
+        "admin_id_prompt": "👤 Admin qilmoqchi bo'lgan foydalanuvchi ID sini yuboring:",
+        "admin_added": "✅ Admin qo'shildi!",
+        "no_locations": "📭 Hali manzillar yo'q",
+        "no_offers": "📭 Hali takliflar yo'q",
+        "reply_prompt": "📝 Javob yozing:",
+        "reply_sent": "✅ Javob yuborildi!",
+    },
+    "ru": {
+        "welcome": "🇷🇺 Выбран русский язык!",
+        "menu_locations": "📍 Адреса",
+        "menu_feedback": "💬 Отзыв & Жалоба",
+        "menu_offers": "🎯 Предложения",
+        "feedback_prompt": "💬 Напишите ваш отзыв или жалобу:",
+        "feedback_sent": "✅ Отзыв принят! Спасибо!",
+        "location_name_prompt": "🏪 Напишите название магазина:",
+        "location_send": "📍 Отправьте локацию:",
+        "location_added": "✅ Адрес добавлен!",
+        "offer_prompt": "🎯 Напишите предложение:",
+        "offer_added": "✅ Предложение добавлено!",
+        "no_locations": "📭 Адресов пока нет",
+        "no_offers": "📭 Предложений пока нет",
+        "reply_prompt": "📝 Напишите ответ:",
+        "reply_sent": "✅ Ответ отправлен!",
+    }
+}
 
-def kino_admin_menu():
+def lang_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇷🇺 Русский язык", callback_data="lang_ru")],
+        [InlineKeyboardButton("🇺🇿 O'zbek tili", callback_data="lang_uz")],
+    ])
+
+def user_menu(lang):
+    l = LANG[lang]
     return ReplyKeyboardMarkup([
-        [KeyboardButton("🎬 Kino qo'shish"), KeyboardButton("🗑 Kino o'chirish")],
-        [KeyboardButton("📋 Kinolar ro'yxati"), KeyboardButton("🔙 Maker ga qaytish")],
+        [KeyboardButton(l["menu_locations"])],
+        [KeyboardButton(l["menu_feedback"])],
+        [KeyboardButton(l["menu_offers"])],
     ], resize_keyboard=True)
 
-async def check_sub(uid, context):
-    try:
-        member = await context.bot.get_chat_member(CHANNEL, uid)
-        return member.status not in ['left', 'kicked']
-    except:
-        return False
+def admin_menu_uz():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📍 Manzil kiritish"), KeyboardButton("🎯 Taklif qo'shish")],
+        [KeyboardButton("👤 Admin qo'shish"), KeyboardButton("🏠 Asosiy menyu")],
+    ], resize_keyboard=True)
 
-# ==================== MAKER START ====================
+def admin_menu_ru():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📍 Добавить адрес"), KeyboardButton("🎯 Добавить предложение")],
+        [KeyboardButton("🏠 Главное меню")],
+    ], resize_keyboard=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
-    
-    uid = update.effective_user.id
-    name = update.effective_user.first_name
-    
-    if str(uid) not in data["users"]:
-        data["users"][str(uid)] = {"name": name, "balance": 0, "bots": {}, "joined": datetime.now().strftime("%Y-%m-%d")}
-        save()
-    
-    if not await check_sub(uid, context):
-        kb = [[InlineKeyboardButton("📢 Obuna bo'lish", url=f"https://t.me/{CHANNEL[1:]}")],
-              [InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")]]
-        await update.message.reply_text(
-            f"👋 Salom, {name}!\n\n📢 {CHANNEL} ga obuna bo'ling!",
-            reply_markup=InlineKeyboardMarkup(kb)
-        )
-        return
-    
-    # Foydalanuvchi boti rejimida emas
-    context.user_data['in_bot'] = None
-    
-    balance = data["users"][str(uid)].get("balance", 0)
-    bots_count = len(data["users"][str(uid)].get("bots", {}))
-    
-    await update.message.reply_text(
-        f"🤖 <b>XENTOR MAKER</b>\n\n"
-        f"👛 Balans: {balance} so'm\n"
-        f"🤖 Botlarim: {bots_count} ta\n\n"
-        f"Bugun nima qilamiz? 😊",
-        reply_markup=maker_menu(uid),
-        parse_mode='HTML'
-    )
+    await update.message.reply_text("🌐 Tilni tanlang | Выберите язык:", reply_markup=lang_keyboard(), parse_mode='HTML')
 
-# ==================== BOT YARATISH ====================
-async def create_bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['creating_bot'] = True
-    context.user_data['bot_step'] = 'token'
-    await update.message.reply_text(
-        "🤖 <b>Bot yaratish</b>\n\n"
-        "1️⃣ <b>@BotFather dan bot tokenini oling</b>\n"
-        "2️⃣ Tokenni shu yerga yuboring:\n\n"
-        "<i>Masalan: 123456:ABCdef...</i>",
-        parse_mode='HTML'
-    )
-
-async def handle_bot_creation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get('creating_bot'):
-        return
+async def lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
     
-    txt = update.message.text.strip()
-    step = context.user_data.get('bot_step')
+    lang = q.data.replace("lang_", "")
+    uid = str(q.from_user.id)
     
-    if step == 'token':
-        # Tokenni tekshirish
-        try:
-            test_app = Application.builder().token(txt).build()
-            bot_info = await test_app.bot.get_me()
-            
-            context.user_data['new_bot_token'] = txt
-            context.user_data['new_bot_name'] = bot_info.first_name
-            context.user_data['new_bot_username'] = bot_info.username
-            context.user_data['bot_step'] = 'pro_price'
-            
-            await update.message.reply_text(
-                f"✅ Bot: @{bot_info.username}\n\n"
-                f"💰 <b>PRO narxini kiriting (so'm):</b>\n"
-                f"<i>Masalan: 14000</i>",
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            await update.message.reply_text(f"❌ Noto'g'ri token! Qaytadan yuboring.\n\nXatolik: {e}")
+    data.setdefault("users", {})[uid] = {"lang": lang}
+    save()
     
-    elif step == 'pro_price':
-        try:
-            pro_price = int(txt)
-            uid = str(update.effective_user.id)
-            username = context.user_data['new_bot_username']
-            token = context.user_data['new_bot_token']
-            
-            # Bot ma'lumotlarini saqlash
-            bot_data = {
-                "token": token,
-                "name": context.user_data['new_bot_name'],
-                "username": username,
-                "pro_price": pro_price,
-                "owner": uid,
-                "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "movies": {},
-                "pro_users": [],
-                "payments": []
-            }
-            
-            data.setdefault("user_bots", {})[username] = bot_data
-            data["users"][uid].setdefault("bots", {})[username] = bot_data
-            save()
-            
-            # Botni ishga tushirish
-            await start_user_kino_bot(username, token, uid, pro_price)
-            
-            await update.message.reply_text(
-                f"🎉 <b>Bot yaratildi va ishga tushdi!</b>\n\n"
-                f"🤖 @{username}\n"
-                f"💰 PRO: {pro_price} so'm\n\n"
-                f"<b>Endi nima qilish kerak:</b>\n"
-                f"1. @{username} ga /start yozing\n"
-                f"2. Siz admin sifatida kino qo'sha olasiz!\n\n"
-                f"<b>Admin panel uchun:</b> @{username} da /admin yozing",
-                parse_mode='HTML'
-            )
-            
-            context.user_data['creating_bot'] = False
-            context.user_data['bot_step'] = None
-            
-        except:
-            await update.message.reply_text("❌ Raqam kiriting!")
+    await q.edit_message_text(LANG[lang]["welcome"])
+    await q.message.reply_text("Asosiy menyu:" if lang == "uz" else "Главное меню:", reply_markup=user_menu(lang))
+    
+    if is_admin(uid):
+        if lang == "uz":
+            await q.message.reply_text("👑 Admin Panel:", reply_markup=admin_menu_uz())
+        else:
+            await q.message.reply_text("👑 Админ панель:", reply_markup=admin_menu_ru())
 
-# ==================== FOYDALANUVCHI BOTINI ISHGA TUSHIRISH ====================
-async def start_user_kino_bot(username, token, owner_id, pro_price):
-    """Foydalanuvchi boti uchun kino funksiyalarini ishga tushirish"""
-    try:
-        user_app = Application.builder().token(token).build()
-        
-        # Bot ma'lumotlari
-        bot_data = {
-            "app": user_app,
-            "owner": str(owner_id),
-            "pro_price": pro_price,
-            "username": username
-        }
-        
-        # Kino bot handlerlari
-        async def user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if update.effective_chat.type != 'private':
-                return
-            
-            uid = update.effective_user.id
-            movies = data["user_bots"].get(username, {}).get("movies", {})
-            
-            if str(uid) == str(owner_id):
-                await update.message.reply_text(
-                    f"🎬 <b>KINO BOT</b>\n\n"
-                    f"👋 Admin, xush kelibsiz!\n\n"
-                    f"🔢 Kod yuboring yoki /admin",
-                    reply_markup=kino_admin_menu(),
-                    parse_mode='HTML'
-                )
-            else:
-                await update.message.reply_text(
-                    f"🎬 <b>KINO BOT</b>\n\n"
-                    f"🔢 Kino kodini yuboring va toping!\n\n"
-                    f"📊 Jami kinolar: {len(movies)} ta"
-                )
-        
-        async def user_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if str(update.effective_user.id) != str(owner_id):
-                await update.message.reply_text("❌ Siz admin emassiz!")
-                return
-            await update.message.reply_text("👑 Admin Panel", reply_markup=kino_admin_menu())
-        
-        async def user_handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = str(update.effective_user.id)
-            txt = update.message.text.strip()
-            movies = data["user_bots"].get(username, {}).get("movies", {})
-            
-            # Admin funksiyalari
-            if uid == str(owner_id):
-                if txt == "🎬 Kino qo'shish":
-                    context.user_data['user_adding'] = True
-                    context.user_data['user_step'] = 'code'
-                    await update.message.reply_text("🔢 <b>Kino kodini yuboring:</b>", parse_mode='HTML')
-                    return
-                
-                if txt == "🗑 Kino o'chirish":
-                    if not movies:
-                        await update.message.reply_text("📭 Kinolar yo'q!"); return
-                    kb = [[InlineKeyboardButton(f"🗑 {code} - {m['name'][:30]}", callback_data=f"udel_{username}_{code}")] for code, m in movies.items()]
-                    await update.message.reply_text("🗑 O'chirish uchun tanlang:", reply_markup=InlineKeyboardMarkup(kb))
-                    return
-                
-                if txt == "📋 Kinolar ro'yxati":
-                    if not movies:
-                        await update.message.reply_text("📭 Kinolar yo'q!"); return
-                    text = "📋 <b>Kinolar:</b>\n\n"
-                    for code, m in movies.items():
-                        text += f"🎬 {code} | {m['name']} | 👁{m.get('views', 0)}\n"
-                    await update.message.reply_text(text, parse_mode='HTML')
-                    return
-                
-                if txt == "🔙 Maker ga qaytish":
-                    context.user_data['user_adding'] = False
-                    await update.message.reply_text("🔙 Maker ga qaytdingiz. /start bosing.")
-                    return
-                
-                # Kino qo'shish bosqichlari
-                if context.user_data.get('user_adding'):
-                    step = context.user_data.get('user_step')
-                    if step == 'code':
-                        context.user_data['user_code'] = txt
-                        context.user_data['user_step'] = 'name'
-                        await update.message.reply_text("📝 <b>Kino nomini yuboring:</b>", parse_mode='HTML')
-                    elif step == 'name':
-                        code = context.user_data['user_code']
-                        data["user_bots"][username]["movies"][code] = {
-                            "name": txt,
-                            "desc": "",
-                            "genre": "",
-                            "parts_count": 1,
-                            "parts": {},
-                            "rating": 0,
-                            "views": 0,
-                            "added": datetime.now().strftime("%Y-%m-%d")
-                        }
-                        save()
-                        context.user_data['user_adding'] = False
-                        await update.message.reply_text(f"✅ <b>Kino qo'shildi!</b>\n🎬 {txt}\n🔢 Kod: {code}", parse_mode='HTML')
-                    return
-            
-            # Kino kodini qidirish
-            movie = movies.get(txt)
-            if movie:
-                data["user_bots"][username]["movies"][txt]["views"] = data["user_bots"][username]["movies"][txt].get("views", 0) + 1
-                save()
-                
-                text = f"🎬 <b>{movie['name']}</b>\n\n"
-                text += f"⭐ Reyting: {movie.get('rating', 0)}/5\n"
-                text += f"🎭 Janr: {movie.get('genre', 'Nomalum')}\n"
-                text += f"🔢 Kod: <code>{txt}</code>\n"
-                text += f"🎞 Qismlar: {movie.get('parts_count', 1)}\n"
-                text += f"👁 Ko'rishlar: {movie.get('views', 0)}\n"
-                text += f"📅 Qo'shilgan: {movie.get('added', '?')}"
-                
-                parts = movie.get("parts", {})
-                kb = []
-                parts_row = []
-                for i in range(1, movie.get('parts_count', 1) + 1):
-                    if str(i) in parts:
-                        parts_row.append(InlineKeyboardButton(f"▶️{i}", callback_data=f"uplay_{username}_{txt}_{i}"))
-                if parts_row:
-                    kb.append(parts_row)
-                
-                await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode='HTML')
-                return
-            
-            await update.message.reply_text("❌ Kino topilmadi!")
-        
-        async def user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            q = update.callback_query
-            await q.answer()
-            d = q.data
-            
-            if d.startswith("udel_"):
-                parts = d.split("_")
-                bot_username = parts[1]
-                code = parts[2]
-                
-                if bot_username in data["user_bots"] and code in data["user_bots"][bot_username]["movies"]:
-                    name = data["user_bots"][bot_username]["movies"][code]["name"]
-                    del data["user_bots"][bot_username]["movies"][code]
-                    save()
-                    await q.edit_message_text(f"✅ {name} o'chirildi!")
-            
-            elif d.startswith("uplay_"):
-                parts = d.split("_")
-                bot_username = parts[1]
-                code = parts[2]
-                part_num = parts[3]
-                
-                movie = data["user_bots"].get(bot_username, {}).get("movies", {}).get(code, {})
-                video_id = movie.get("parts", {}).get(part_num)
-                if video_id:
-                    await q.message.reply_video(video_id, caption=f"🎬 {movie['name']} - Qism {part_num}")
-        
-        # Handlerlarni qo'shish
-        user_app.add_handler(CommandHandler("start", user_start))
-        user_app.add_handler(CommandHandler("admin", user_admin))
-        user_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, user_handle_text))
-        user_app.add_handler(CallbackQueryHandler(user_callback))
-        
-        # Botni ishga tushirish
-        await user_app.initialize()
-        await user_app.start()
-        asyncio.create_task(user_app.updater.start_polling())
-        
-        active_user_bots[username] = bot_data
-        print(f"✅ Bot ishga tushdi: @{username}")
-        
-    except Exception as e:
-        print(f"❌ Bot ishga tushmadi: {e}")
-
-# ==================== MAKER HANDLE TEXT ====================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
         return
     
-    uid = update.effective_user.id
+    uid = str(update.effective_user.id)
     txt = update.message.text.strip()
+    user = data["users"].get(uid, {})
+    lang = user.get("lang", "uz")
+    l = LANG[lang]
     
-    # Bot yaratish jarayoni
-    if context.user_data.get('creating_bot'):
-        await handle_bot_creation(update, context)
+    # Fikr yozish
+    if context.user_data.get('writing_feedback'):
+        for admin_id in data.get("admins", []):
+            try:
+                kb = [[InlineKeyboardButton("📝 Javob yozish", callback_data=f"reply_{uid}")]]
+                await context.bot.send_message(
+                    int(admin_id),
+                    f"💬 Yangi fikr!\n\n👤 {update.effective_user.first_name}\n🆔 {uid}\n\n📝 {txt}",
+                    reply_markup=InlineKeyboardMarkup(kb)
+                )
+            except: pass
+        
+        await update.message.reply_text(l["feedback_sent"])
+        context.user_data['writing_feedback'] = False
         return
     
-    # Admin amallari
-    if uid == ADMIN_ID and context.user_data.get('admin_action'):
-        action = context.user_data['admin_action']
-        
-        if action == 'user_id':
-            context.user_data['target_uid'] = txt
-            context.user_data['admin_action'] = 'user_amount'
-            await update.message.reply_text("💰 Qancha pul qo'shmoqchisiz?", parse_mode='HTML')
-        
-        elif action == 'user_amount':
-            try:
-                amount = int(txt)
-                target = context.user_data['target_uid']
-                data.setdefault("users", {}).setdefault(target, {})
-                data["users"][target]["balance"] = data["users"][target].get("balance", 0) + amount
-                save()
-                await update.message.reply_text(f"✅ {amount} so'm qo'shildi!")
-                context.user_data['admin_action'] = None
-            except:
-                await update.message.reply_text("❌ Raqam kiriting!")
-        
-        elif action == 'promo_name':
-            context.user_data['promo_name'] = txt
-            context.user_data['admin_action'] = 'promo_reward'
-            await update.message.reply_text("🎁 Mukofot miqdori:")
-        
-        elif action == 'promo_reward':
-            try:
-                context.user_data['promo_reward'] = int(txt)
-                context.user_data['admin_action'] = 'promo_limit'
-                await update.message.reply_text("👥 Necha kishi ishlata oladi?")
-            except:
-                await update.message.reply_text("❌ Raqam kiriting!")
-        
-        elif action == 'promo_limit':
-            try:
-                limit = int(txt)
-                data.setdefault("promocodes", {})[context.user_data['promo_name']] = {
-                    "reward": context.user_data['promo_reward'],
-                    "limit": limit,
-                    "used_by": []
-                }
-                save()
-                await update.message.reply_text(f"✅ Promokod yaratildi!")
-                context.user_data['admin_action'] = None
-            except:
-                await update.message.reply_text("❌ Raqam kiriting!")
-        
-        elif action == 'post_text':
-            text = f"📢 {txt}"
-            users = data.get("users", {})
-            count = 0
-            for u in users:
-                try:
-                    await context.bot.send_message(int(u), text)
-                    count += 1
-                except: pass
-            await update.message.reply_text(f"✅ {count} kishiga yuborildi!")
-            context.user_data['admin_action'] = None
-        
+    # Admin javob yozish
+    if context.user_data.get('replying_to'):
+        target = context.user_data['replying_to']
+        try:
+            await context.bot.send_message(int(target), f"📩 Admin javobi:\n\n💬 {txt}")
+            await update.message.reply_text(l["reply_sent"])
+        except:
+            await update.message.reply_text("❌ Yuborib bo'lmadi!")
+        context.user_data['replying_to'] = None
         return
     
-    # Promokod kiritish
-    if context.user_data.get('entering_promo'):
-        promo = txt.upper()
-        promo_data = data.get("promocodes", {}).get(promo)
-        
-        if not promo_data:
-            await update.message.reply_text("❌ Bunday promokod yo'q!")
-        elif str(uid) in promo_data.get("used_by", []):
-            await update.message.reply_text("❌ Siz ishlatgansiz!")
-        elif len(promo_data.get("used_by", [])) >= promo_data.get("limit", 1):
-            await update.message.reply_text("❌ Limit to'lgan!")
+    # Admin amallari - Uzbek
+    if is_admin(uid) and lang == "uz":
+        if txt == "📍 Manzil kiritish":
+            context.user_data['adding_loc'] = True
+            context.user_data['loc_step'] = 'name'
+            await update.message.reply_text(l["location_name_prompt"])
+            return
+        if txt == "🎯 Taklif qo'shish":
+            context.user_data['adding_offer'] = True
+            await update.message.reply_text(l["offer_prompt"])
+            return
+        if txt == "👤 Admin qo'shish":
+            context.user_data['adding_admin'] = True
+            await update.message.reply_text(l["admin_id_prompt"])
+            return
+        if txt == "🏠 Asosiy menyu":
+            context.user_data.clear()
+            await update.message.reply_text("/start bosing")
+            return
+    
+    # Admin amallari - Rus
+    if is_admin(uid) and lang == "ru":
+        if txt == "📍 Добавить адрес":
+            context.user_data['adding_loc'] = True
+            context.user_data['loc_step'] = 'name'
+            await update.message.reply_text(l["location_name_prompt"])
+            return
+        if txt == "🎯 Добавить предложение":
+            context.user_data['adding_offer'] = True
+            await update.message.reply_text(l["offer_prompt"])
+            return
+        if txt == "🏠 Главное меню":
+            context.user_data.clear()
+            await update.message.reply_text("/start bosing")
+            return
+    
+    # Manzil nomi kiritildi
+    if context.user_data.get('adding_loc') and context.user_data.get('loc_step') == 'name':
+        context.user_data['loc_name'] = txt
+        context.user_data['loc_step'] = 'location'
+        await update.message.reply_text(l["location_send"])
+        return
+    
+    # Taklif kiritildi
+    if context.user_data.get('adding_offer'):
+        if lang == "uz":
+            data.setdefault("offers_uz", []).append(txt)
         else:
-            reward = promo_data["reward"]
-            data["promocodes"][promo]["used_by"].append(str(uid))
-            data["users"][str(uid)]["balance"] = data["users"][str(uid)].get("balance", 0) + reward
+            data.setdefault("offers_ru", []).append(txt)
+        save()
+        await update.message.reply_text(l["offer_added"])
+        context.user_data['adding_offer'] = False
+        return
+    
+    # Admin ID kiritildi
+    if context.user_data.get('adding_admin'):
+        if txt not in data.get("admins", []):
+            data.setdefault("admins", []).append(txt)
             save()
-            await update.message.reply_text(f"🎉 +{reward} so'm qo'shildi!")
-        
-        context.user_data['entering_promo'] = False
+            await update.message.reply_text(l["admin_added"])
+        else:
+            await update.message.reply_text("⚠️ Allaqachon admin!")
+        context.user_data['adding_admin'] = False
         return
     
-    # Menyu tugmalari
-    if txt == "🤖 Bot yaratish":
-        await create_bot_start(update, context)
-    elif txt == "👛 Hisobim":
-        balance = data["users"].get(str(uid), {}).get("balance", 0)
-        await update.message.reply_text(f"👛 Balans: {balance} so'm\n\n💳 To'lov: 4916 9903 1619 3280")
-    elif txt == "💰 Pul ishlash":
-        kb = [
-            [InlineKeyboardButton("🎁 Kunlik bonus (20 so'm)", callback_data="daily_bonus")],
-            [InlineKeyboardButton("🎟 Promokod", callback_data="promo_enter")],
-        ]
-        await update.message.reply_text("💰 Pul ishlash:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-    elif txt == "📋 Botlarim":
-        bots = data["users"].get(str(uid), {}).get("bots", {})
-        if not bots:
-            await update.message.reply_text("📭 Botlar yo'q!")
-        else:
-            text = "🤖 Botlarim:\n\n"
-            for username, bot in bots.items():
-                text += f"🤖 @{username}\n💰 PRO: {bot['pro_price']} so'm\n\n"
-            await update.message.reply_text(text)
-    elif txt == "👑 Admin Panel" and uid == ADMIN_ID:
-        kb = [
-            [InlineKeyboardButton("👥 Foydalanuvchiga pul", callback_data="admin_user")],
-            [InlineKeyboardButton("🎟 Promokod yaratish", callback_data="admin_promo")],
-            [InlineKeyboardButton("📢 Post tarqatish", callback_data="admin_post")],
-        ]
-        await update.message.reply_text("👑 Admin Panel", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-    elif txt == "❓ Yordam":
-        await update.message.reply_text("🤖 @BotFather dan token oling va bot yarating!")
+    # Menyu
+    if txt == l["menu_locations"]:
+        locs = data.get(f"locations_{lang}", [])
+        if not locs:
+            await update.message.reply_text(l["no_locations"])
+            return
+        text = f"📍 Manzillar:\n\n" if lang == "uz" else f"📍 Адреса:\n\n"
+        for i, loc in enumerate(locs, 1):
+            text += f"{i}. 🏪 {loc['name']}\n📍 {loc.get('address', '')}\n\n"
+        await update.message.reply_text(text)
+        return
+    
+    if txt == l["menu_feedback"]:
+        context.user_data['writing_feedback'] = True
+        await update.message.reply_text(l["feedback_prompt"])
+        return
+    
+    if txt == l["menu_offers"]:
+        offs = data.get(f"offers_{lang}", [])
+        if not offs:
+            await update.message.reply_text(l["no_offers"])
+            return
+        text = f"🎯 Takliflar:\n\n" if lang == "uz" else f"🎯 Предложения:\n\n"
+        for i, o in enumerate(offs, 1):
+            text += f"{i}. {o}\n\n"
+        await update.message.reply_text(text)
+        return
 
-# ==================== CALLBACK ====================
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    
+    if is_admin(uid) and context.user_data.get('adding_loc') and context.user_data.get('loc_step') == 'location':
+        user = data["users"].get(uid, {})
+        lang = user.get("lang", "uz")
+        l = LANG[lang]
+        
+        loc = update.message.location
+        loc_data = {
+            "name": context.user_data['loc_name'],
+            "latitude": loc.latitude,
+            "longitude": loc.longitude,
+            "address": f"{loc.latitude}, {loc.longitude}"
+        }
+        
+        if lang == "uz":
+            data.setdefault("locations_uz", []).append(loc_data)
+        else:
+            data.setdefault("locations_ru", []).append(loc_data)
+        save()
+        
+        await update.message.reply_text(l["location_added"])
+        context.user_data['adding_loc'] = False
+        context.user_data['loc_step'] = None
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     d = q.data
-    uid = q.from_user.id
     
-    if d == "check_sub":
-        if await check_sub(uid, context):
-            await q.delete_message()
-            await start(update, context)
-        else:
-            await q.answer("❌ Obuna bo'lmagansiz!", show_alert=True)
-    elif d == "daily_bonus":
-        today = datetime.now().strftime("%Y-%m-%d")
-        if data.get("daily_bonus", {}).get(str(uid)) == today:
-            await q.answer("❌ Bugun oldingiz!", show_alert=True)
-        else:
-            data.setdefault("daily_bonus", {})[str(uid)] = today
-            data["users"][str(uid)]["balance"] = data["users"][str(uid)].get("balance", 0) + 20
-            save()
-            await q.edit_message_text(f"✅ +20 so'm!\n💰 Balans: {data['users'][str(uid)]['balance']} so'm")
-    elif d == "promo_enter":
-        context.user_data['entering_promo'] = True
-        await q.edit_message_text("🎟 Promokodni kiriting:")
-    elif d == "admin_user":
-        if uid != ADMIN_ID: return
-        context.user_data['admin_action'] = 'user_id'
-        await q.edit_message_text("👤 Foydalanuvchi ID sini yuboring:")
-    elif d == "admin_promo":
-        if uid != ADMIN_ID: return
-        context.user_data['admin_action'] = 'promo_name'
-        await q.edit_message_text("🎟 Promokod nomini kiriting:")
-    elif d == "admin_post":
-        if uid != ADMIN_ID: return
-        context.user_data['admin_action'] = 'post_text'
-        await q.edit_message_text("📢 E'lon matnini yuboring:")
+    if d.startswith("reply_"):
+        target = d.replace("reply_", "")
+        context.user_data['replying_to'] = target
+        await q.edit_message_text(f"{q.message.text}\n\n✍️ Javob yozing:")
 
-# ==================== MAIN ====================
-async def main():
-    application = Application.builder().token(MAKER_TOKEN).build()
+def main():
+    Thread(target=run_flask).start()
+    application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(CallbackQueryHandler(lang_callback, pattern="^lang_"))
+    application.add_handler(CallbackQueryHandler(callback_handler, pattern="^reply_"))
     
-    # Saqlangan botlarni qayta ishga tushirish
-    for username, bot_data in data.get("user_bots", {}).items():
-        try:
-            await start_user_kino_bot(username, bot_data["token"], bot_data["owner"], bot_data["pro_price"])
-        except:
-            pass
-    
-    print("✅ Xentor Maker ishga tushdi!")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("✅ Umnyaga Bot ishga tushdi!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
