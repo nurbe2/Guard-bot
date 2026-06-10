@@ -49,11 +49,15 @@ LANG = {
         "menu_settings": "⚙️ Sozlamalar",
         "feedback_prompt": "💬 Fikr yoki shikoyatingizni yozing:",
         "feedback_sent": "✅ Fikringiz qabul qilindi! Rahmat!",
+        "offer_prompt": "🎯 Takliflaringizni yozing:",
+        "offer_sent": "✅ Taklifingiz adminga yuborildi!",
+        "new_offer": "🎯 Yangi taklif!",
+        "admin_reply": "📩 Admin javobi:",
         "location_name": "🏪 Do'kon nomini yozing:",
         "location_send": "📍 Endi lokatsiya tashlang:",
         "location_added": "✅ Manzil qo'shildi!",
-        "offer_prompt": "🎯 Taklifni yozing:",
-        "offer_added": "✅ Taklif qo'shildi!",
+        "admin_offer_prompt": "🎯 Taklifni yozing:",
+        "admin_offer_added": "✅ Taklif qo'shildi!",
         "admin_id": "👤 Admin ID sini yuboring:",
         "admin_added": "✅ Admin qo'shildi!",
         "no_locations": "📭 Manzillar yo'q",
@@ -69,9 +73,9 @@ LANG = {
         "choose_shop": "🏪 Do'konni tanlang:",
         "offer_deleted": "✅ Taklif o'chirildi!",
         "loc_deleted": "✅ Manzil o'chirildi!",
-        "settings_text": "⚙️ <b>Sozlamalar</b>\n\nTilni o'zgartirish:",
+        "settings_text": "⚙️ Sozlamalar\n\nTilni o'zgartirish:",
         "lang_changed": "✅ Til o'zgartirildi! /start bosing.",
-        "broadcast_prompt": "📢 <b>Post yuboring:</b>\n\nRasm yoki matn yuboring:",
+        "broadcast_prompt": "📢 Post yuboring:\n\nRasm yoki matn yuboring:",
         "broadcast_sent": "✅ Post {count} kishiga yuborildi!",
     },
     "ru": {
@@ -82,11 +86,15 @@ LANG = {
         "menu_settings": "⚙️ Настройки",
         "feedback_prompt": "💬 Напишите отзыв или жалобу:",
         "feedback_sent": "✅ Отзыв принят! Спасибо!",
+        "offer_prompt": "🎯 Напишите ваши предложения:",
+        "offer_sent": "✅ Ваше предложение отправлено админу!",
+        "new_offer": "🎯 Новое предложение!",
+        "admin_reply": "📩 Ответ админа:",
         "location_name": "🏪 Название магазина:",
         "location_send": "📍 Отправьте локацию:",
         "location_added": "✅ Адрес добавлен!",
-        "offer_prompt": "🎯 Напишите предложение:",
-        "offer_added": "✅ Предложение добавлено!",
+        "admin_offer_prompt": "🎯 Напишите предложение:",
+        "admin_offer_added": "✅ Предложение добавлено!",
         "no_locations": "📭 Адресов нет",
         "no_offers": "📭 Предложений нет",
         "reply_sent": "✅ Ответ отправлен!",
@@ -99,9 +107,9 @@ LANG = {
         "choose_shop": "🏪 Выберите магазин:",
         "offer_deleted": "✅ Предложение удалено!",
         "loc_deleted": "✅ Адрес удален!",
-        "settings_text": "⚙️ <b>Настройки</b>\n\nИзменить язык:",
+        "settings_text": "⚙️ Настройки\n\nИзменить язык:",
         "lang_changed": "✅ Язык изменен! Нажмите /start",
-        "broadcast_prompt": "📢 <b>Отправьте пост:</b>\n\nОтправьте фото или текст:",
+        "broadcast_prompt": "📢 Отправьте пост:\n\nОтправьте фото или текст:",
         "broadcast_sent": "✅ Отправлено {count} людям!",
     }
 }
@@ -146,7 +154,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     user_lang = get_lang(uid)
     
-    # Agar til tanlangan bo'lsa, to'g'ridan-to'g'ri menyu
     if user_lang and data.get("users", {}).get(uid, {}).get("lang"):
         lang = user_lang
         l = LANG[lang]
@@ -158,7 +165,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(l["user_menu_text"], reply_markup=user_menu_kb(lang))
         return
     
-    # Til tanlanmagan bo'lsa
     context.user_data.clear()
     await update.message.reply_text("🌐 Tilni tanlang | Выберите язык:", reply_markup=lang_kb(), parse_mode='HTML')
 
@@ -191,7 +197,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(uid)
     l = LANG[lang]
     
-    # Fikr yozish
+    # ===== FIKR YOZISH =====
     if context.user_data.get('writing_feedback'):
         data.setdefault("feedbacks", []).append({
             "uid": uid, "name": update.effective_user.first_name,
@@ -214,18 +220,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['writing_feedback'] = False
         return
     
-    # Admin javob yozish
+    # ===== TAKLIF YOZISH (foydalanuvchi) =====
+    if context.user_data.get('writing_offer'):
+        offer_text = txt
+        
+        for admin_id in data.get("admins", []):
+            try:
+                kb = [[InlineKeyboardButton("📝 Javob yozish", callback_data=f"reply_{uid}")]]
+                await context.bot.send_message(
+                    int(admin_id),
+                    f"{l['new_offer']}\n\n👤 {update.effective_user.first_name}\n🆔 <code>{uid}</code>\n🌐 {lang}\n\n📝 {offer_text}",
+                    reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML'
+                )
+            except: pass
+        
+        await update.message.reply_text(l["offer_sent"])
+        context.user_data['writing_offer'] = False
+        return
+    
+    # ===== ADMIN JAVOB YOZISH =====
     if context.user_data.get('replying_to'):
         target = context.user_data['replying_to']
         try:
-            await context.bot.send_message(int(target), f"📩 <b>Admin javobi:</b>\n\n💬 {txt}", parse_mode='HTML')
+            await context.bot.send_message(
+                int(target),
+                f"{l['admin_reply']}\n\n💬 {txt}",
+                parse_mode='HTML'
+            )
             await update.message.reply_text(l["reply_sent"])
         except:
             await update.message.reply_text("❌ Yuborib bo'lmadi!")
         context.user_data['replying_to'] = None
         return
     
-    # Admin - broadcast (matn)
+    # ===== ADMIN - BROADCAST MATN =====
     if context.user_data.get('broadcasting'):
         users = data.get("users", {})
         count = 0
@@ -238,23 +266,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['broadcasting'] = False
         return
     
-    # Admin - manzil nomi
+    # ===== ADMIN - MANZIL NOMI =====
     if context.user_data.get('adding_loc') == 'name':
         context.user_data['loc_name'] = txt
         context.user_data['adding_loc'] = 'location'
         await update.message.reply_text(l["location_send"])
         return
     
-    # Admin - taklif
+    # ===== ADMIN - TAKLIF QO'SHISH =====
     if context.user_data.get('adding_offer'):
         key = f"offers_{lang}"
         data.setdefault(key, []).append(txt)
         save()
-        await update.message.reply_text(l["offer_added"])
+        await update.message.reply_text(l["admin_offer_added"])
         context.user_data['adding_offer'] = False
         return
     
-    # Admin - ID
+    # ===== ADMIN - ID =====
     if context.user_data.get('adding_admin'):
         if txt not in data.get("admins", []):
             data.setdefault("admins", []).append(txt)
@@ -282,7 +310,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if txt in [l["add_offer"], "⚙️ " + l["add_offer"]]:
             context.user_data['adding_offer'] = True
-            await update.message.reply_text(l["offer_prompt"])
+            await update.message.reply_text(l["admin_offer_prompt"])
             return
         
         if txt in [l["delete_offer"], "⚙️ " + l["delete_offer"]]:
@@ -303,7 +331,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(l["admin_id"])
             return
     
-    # ===== MENYU =====
+    # ===== FOYDALANUVCHI MENYUSI =====
     if txt == l["menu_locations"]:
         locs = data.get(f"locations_{lang}", [])
         if not locs:
@@ -318,13 +346,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if txt == l["menu_offers"]:
-        offs = data.get(f"offers_{lang}", [])
-        if not offs:
-            await update.message.reply_text(l["no_offers"]); return
-        text = "🎯 Takliflar:\n\n" if lang == "uz" else "🎯 Предложения:\n\n"
-        for i, o in enumerate(offs, 1):
-            text += f"{i}. {o}\n\n"
-        await update.message.reply_text(text)
+        context.user_data['writing_offer'] = True
+        await update.message.reply_text(l["offer_prompt"])
         return
     
     if txt == l["menu_settings"]:
@@ -354,13 +377,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
+    lang = get_lang(uid)
+    l = LANG[lang]
     
-    # Admin broadcast rasm
     if is_admin(uid) and context.user_data.get('broadcasting'):
         photo = update.message.photo[-1]
         caption = update.message.caption or "📢 E'lon"
-        lang = get_lang(uid)
-        l = LANG[lang]
         
         users = data.get("users", {})
         count = 0
@@ -372,19 +394,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(l["broadcast_sent"].format(count=count))
         context.user_data['broadcasting'] = False
-        return
-    
-    # Admin kino rasmi (agar kerak bo'lsa)
-    if is_admin(uid) and context.user_data.get('adding_loc') == 'photo':
-        # Bu yerda rasm qabul qilish logikasi
-        pass
 
 # ==================== CALLBACK ====================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     d = q.data
-    lang = get_lang(q.from_user.id)
     
     if d.startswith("reply_"):
         target = d.replace("reply_", "")
